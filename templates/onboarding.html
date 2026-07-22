@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Add your website — Fact Check{% endblock %}
+{% block content %}
+<div class="center-card">
+  <div class="card onboarding">
+    <h1>{{ "Welcome — let's fact-check your site" if first_run else "Add a website" }}</h1>
+    <p class="muted">
+      Paste your website address, your sitemap link, or upload a list of URLs.
+      We'll figure out the rest — you don't need to know what a sitemap is.
+    </p>
+
+    {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+    <form method="post" action="/add-site" enctype="multipart/form-data" class="stack">
+      <label class="field">
+        <span>Website or sitemap URL</span>
+        <input type="text" name="url" placeholder="https://yourcompany.com   or   https://yourcompany.com/sitemap.xml" />
+      </label>
+
+      <div class="or">or</div>
+
+      <label class="field">
+        <span>Upload a URL list (.txt or .csv)</span>
+        <input type="file" name="file" accept=".txt,.csv" />
+      </label>
+
+      <label class="field">
+        <span>Name <span class="muted">(optional)</span></span>
+        <input type="text" name="name" placeholder="e.g. Company website" />
+      </label>
+
+      <button type="submit" class="btn btn-primary">Add website</button>
+      <p class="muted small">We only read your pages to check facts — we never modify your site.</p>
+    </form>
+  </div>
+</div>
+{% endblock %}

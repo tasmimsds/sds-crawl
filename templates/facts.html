@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Facts Library — SDS Fact Check{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Facts Library</h1>
+  <p class="muted">The source-of-truth rules and feature list used to check your content. Add "Our database is 17M+" without touching a file.</p></div>
+
+<div class="lib-toolbar">
+  <a class="btn btn-primary btn-sm" href="/fact-check">＋ New Fact (free text)</a>
+  <a class="btn btn-sm" href="/facts/rule/new">＋ New rule (advanced)</a>
+  <a class="btn btn-sm" href="/facts/export">⇩ Export YAML</a>
+  <form method="post" action="/facts/import" enctype="multipart/form-data" class="import-form">
+    <input type="file" name="file" accept=".yaml,.yml" required />
+    <button class="btn btn-sm" type="submit">Import YAML</button>
+  </form>
+</div>
+
+<h2 class="section-h">Fact rules ({{ rules|length }})</h2>
+<div class="card table-card">
+  <table class="tbl">
+    <thead><tr><th>Name</th><th>Type</th><th>Category</th><th>Correct value</th><th>Sev</th><th>On</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rules %}
+      <tr>
+        <td><b>{{ r.name or r.slug }}</b><div class="muted small clamp2">{{ r.description }}</div></td>
+        <td>{{ r.rule_type }}</td>
+        <td class="muted small">{{ r.category|cat_label }}</td>
+        <td>{{ r.correct_value or '—' }}</td>
+        <td><span class="badge sev-{{ r.severity }}">{{ r.severity }}</span></td>
+        <td>
+          <form method="post" action="/facts/rule/{{ r.slug }}/toggle" class="inline">
+            <button class="linkbtn" type="submit">{{ '✓ on' if r.enabled else '○ off' }}</button>
+          </form>
+        </td>
+        <td class="row-actions">
+          <a href="/facts/rule/{{ r.slug }}/edit">Edit</a>
+          <form method="post" action="/facts/rule/{{ r.slug }}/delete" class="inline" onsubmit="return confirm('Delete this rule?')">
+            <button class="linkbtn danger" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2 class="section-h">Features ({{ feats|length }})
+  <a class="btn btn-sm" href="/facts/feature/new" style="float:right">＋ New feature</a></h2>
+<div class="card table-card">
+  <table class="tbl">
+    <thead><tr><th>Feature</th><th>Status</th><th>Description</th><th></th></tr></thead>
+    <tbody>
+    {% for f in feats %}
+      <tr>
+        <td><b>{{ f.name }}</b><div class="muted small">{{ f.slug }}</div></td>
+        <td><span class="badge status-badge-{{ f.status }}">{{ f.status }}</span></td>
+        <td class="muted small clamp2">{{ f.description }}</td>
+        <td class="row-actions">
+          <a href="/facts/feature/{{ f.slug }}/edit">Edit</a>
+          <form method="post" action="/facts/feature/{{ f.slug }}/delete" class="inline" onsubmit="return confirm('Delete this feature?')">
+            <button class="linkbtn danger" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

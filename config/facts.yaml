@@ -1,0 +1,140 @@
+# SOURCE OF TRUTH registry — maintained by the SDS Manager team.
+#
+# Two kinds of entries (field `type`):
+#   type: stale      -> stale_patterns raise an issue; current_value is the fix.
+#   type: inventory  -> claim_patterns are inventoried site-wide; when
+#                       canonical_value is set, non-matching pages are flagged.
+#
+# Common fields:
+#   id, category, type, description, severity, applies_to (all | english_only), notes
+#
+# stale-type fields:
+#   current_value      canonical value (shown as "expected")
+#   current_patterns   regex matching the CORRECT value (informational)
+#   stale_patterns     regex matching WRONG/outdated values -> issue
+#   require_context    (optional) at least one must match within ±context_window
+#                      of the hit, else skip (kills off-topic matches)
+#   allowed_patterns   (optional) if any matches within ±context_window, SKIP the
+#                      hit (e.g. "free trial" is allowed near a "free" mention)
+#   context_window     chars each side for require_context / allowed_patterns
+#
+# inventory-type fields:
+#   claim_patterns     regex with capture group 1 = the number/value to inventory
+#   canonical_value    null until you decide; when set, mismatches are flagged
+#
+# Regex is Python `re`, matched case-insensitively.
+
+facts:
+  # ---- Issue 1: SDS database size --------------------------------------
+  - id: sds_database_size
+    category: database_size
+    type: stale
+    description: "Number of Safety Data Sheets in the SDS Manager database"
+    current_value: "17 million+"
+    current_patterns:
+      - "17\\s*(?:M\\b|\\s*million|\\+)"
+    stale_patterns:
+      - "\\b1[0-6]\\s*(?:M\\b|million|mill\\b)"        # 10M–16M
+      - "\\b1[0-6][.,]\\d+\\s*(?:M\\b|million)"          # 16.5 million etc.
+    # Only when the number is actually about the SDS database, not e.g.
+    # "16 million tonnes of waste".
+    require_context:
+      - "SDS"
+      - "safety data sheet"
+      - "data sheet"
+      - "database"
+      - "documents?\\b"
+      - "library"
+    context_window: 120
+    # Also inventory every DB-size claim found site-wide.
+    claim_patterns:
+      - "(\\d{1,2}(?:[.,]\\d+)?)\\s*(?:M\\b|million|mill\\b)\\s*(?:\\+\\s*)?(?:SDS|safety data sheet|data sheet|document)"
+    severity: high
+    applies_to: all
+    notes: "Current figure is 17M+. Historic pages may say 12M/14M/15M/16M."
+
+  # ---- Issue 2: Target-market positioning ------------------------------
+  - id: positioning
+    category: positioning
+    type: stale
+    description: "SDS Manager is Enterprise-focused, not small-business focused"
+    current_value: "Enterprise Solutions focused"
+    stale_patterns:
+      - "small business(?:es)?"
+      - "small organi[sz]ations?"
+      - "\\bSMBs?\\b"
+      - "small[\\s-]and[\\s-]medium"
+      - "small (?:to|&|and) medium"
+      - "(?:perfect|ideal|suitable|great|designed) for small"
+      - "small (?:teams?|companies|firms|enterprises)"
+    severity: high
+    applies_to: all
+    notes: "Rewrite to enterprise-focused. LLM pass catches paraphrases regex misses."
+
+  # ---- Issue 3: FREE claims (pricing misrepresentation) ----------------
+  - id: free_policy
+    category: free_claim
+    type: stale
+    description: "No free plan exists — only a free TRIAL, then paid"
+    current_value: "Free trial only (no free plan/version/tier)"
+    stale_patterns:
+      - "free plan"
+      - "free version"
+      - "free option"
+      - "free (?:forever|tier|account|subscription|edition)"
+      - "forever free"
+      - "(?:100%|completely|totally|entirely)\\s*free"
+      - "free of charge"
+      - "free to use"
+      - "use (?:it |the app |sds ?manager )?for free"
+      - "\\bfor free\\b"
+    # "free trial" and trial context are CORRECT — skip hits near these.
+    allowed_patterns:
+      - "free trial"
+      - "\\btrial\\b"
+      - "\\d+[\\s-]day"
+      - "try .{0,30} free"
+    context_window: 80
+    severity: critical
+    applies_to: all
+    notes: "Distinguish 'free trial' (ok) from 'free plan/option/version' (issue)."
+
+  # ---- Issue 4: Language count (inventory until canonical decided) ------
+  - id: languages_supported
+    category: language_count
+    type: inventory
+    description: "Number of supported languages"
+    claim_patterns:
+      - "(\\d{2,3})\\s*(?:\\+\\s*)?languages\\b"
+      - "in\\s*(\\d{2,3})\\s*(?:\\+\\s*)?languages"
+      - "(\\d{2,3})\\s*(?:different\\s*)?languages"
+    canonical_value: "36"          # set by team 2026-07-20; mismatches now flag
+    severity: high
+    applies_to: all
+    notes: "Canonical = 36 languages. Pages claiming 29/35/39/40/48 are flagged."
+
+  # ---- Issue 5: Region / country / market / translation counts ---------
+  - id: region_count
+    category: region_count
+    type: inventory
+    description: "Number of regions / countries / markets served"
+    claim_patterns:
+      - "(\\d{1,4})\\s*(?:\\+\\s*)?(?:countries|regions|markets)\\b"
+      - "in\\s*(\\d{1,4})\\s*(?:\\+\\s*)?(?:countries|regions|markets)"
+    canonical_value: "36"
+    severity: high
+    applies_to: all
+    notes: "Canonical = 36 regions (same as languages). Company serves worldwide/all
+      nationalities, so treat flagged country-count claims (e.g. 50/80) as prompts
+      to reword, and mark true 'customers in N countries' stats as ignored."
+
+  - id: translation_count
+    category: region_count
+    type: inventory
+    description: "Number of translations"
+    claim_patterns:
+      - "(\\d{1,4})\\s*(?:\\+\\s*)?translations\\b"
+    canonical_value: "36"
+    severity: high
+    applies_to: all
+    notes: "Canonical = 36 (tracks the 36 languages). Adjust if translations differ."

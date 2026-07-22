@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block title %}Fact Check — SDS Fact Check{% endblock %}
+
+{% macro fact_fields(f) %}
+  {# fact_name, correct_value, search_terms are supplied editable per-form to avoid dupes #}
+  <input type="hidden" name="claim_topic" value="{{ f.claim_topic }}" />
+  <input type="hidden" name="category" value="{{ f.category }}" />
+  <input type="hidden" name="severity" value="{{ f.severity or 'high' }}" />
+  <input type="hidden" name="applies_to" value="{{ f.applies_to or 'all' }}" />
+  <input type="hidden" name="notes" value="{{ f.notes }}" />
+  <input type="hidden" name="stale_indicators" value="{{ f.stale_indicators|join('\n') }}" />
+  <input type="hidden" name="allowed_mentions" value="{{ f.allowed_mentions|join('\n') }}" />
+{% endmacro %}
+
+{% block content %}
+<div class="page-head"><h1>Fact Check</h1>
+  <p class="muted">Type any fact — a short point or a full description. We'll understand it, search your whole site, and highlight every page that gets it wrong.</p></div>
+
+{% set ext_mode = mode in ['external','mentions'] %}
+<div class="tabs">
+  <button class="tab {{ 'active' if not ext_mode }}" data-tab="internal">Internal Fact Check</button>
+  <button class="tab {{ 'active' if ext_mode }}" data-tab="external">External Fact Check</button>
+</div>
+
+<section data-panel="internal" {{ 'hidden' if ext_mode }}>
+  <div class="card query-card">
+    <form method="post" action="/fact-check/interpret">
+      <textarea class="fact-input" name="text" rows="3" required
+        placeholder="e.g.  SDS database is 17M+   —or—   We don't offer a free plan, only a free trial. Pages saying 'free plan' or 'use for free' are wrong; 'free trial' is fine.">{{ raw_text or '' }}</textarea>
+      <details class="advanced"><summary>Advanced (optional)</summary>
+        <div class="row2" style="margin-top:8px">
+          <label class="field"><span>Severity</span>
+            <select name="severity">{% for s in ['critical','high','medium','low'] %}<option value="{{ s }}" {{ 'selected' if s=='high' }}>{{ s }}</option>{% endfor %}</select></label>
+          <label class="field"><span>Apply to</span>
+            <select name="applies_to"><option value="all">All locales</option><option value="english_only">English only</option></select></label>
+        </div>
+      </details>
+      <button class="btn btn-primary" type="submit">Check this fact</button>
+    </form>
+  </div>
+
+  {# ---------- CONFIRM ---------- #}
+  {% if mode == 'confirm' %}
+    <h2 class="section-h">{% if facts|length > 1 %}We found {{ facts|length }} facts in your text{% else %}Confirm what we'll check{% endif %}</h2>
+    {% for f in facts %}
+    <div class="card confirm-card">
+      <form method="post" action="/fact-check/run" class="fact-form">
+        {{ fact_fields(f) }}
+        <div class="cf-head">
+          <label class="field grow"><span>Fact</span>
+            <input type="text" name="fact_name" value="{{ f.fact_name }}" /></label>
+          <label class="field"><span>Correct value {% if not f.correct_value %}<b class="warn">— which value is correct?</b>{% endif %}</span>
+            <input type="text" name="correct_value" value="{{ f.correct_value or '' }}"
+              placeholder="{{ 'Leave blank to just search' if not f.correct_value else '' }}" /></label>
+        </div>
+        <div class="muted small">Searching for (edit chips):</div>
+        <div class="chips-edit">
+          <input type="hidden" name="search_terms" value="{{ f.search_terms|join('\n') }}" />
+          <div class="chips-list"></div>
+          <input class="chip-add" type="text" placeholder="add a term, press Enter" />
+        </div>
+        {% if f.stale_indicators %}<div class="muted small">Flagging as wrong: {{ f.stale_indicators|join(', ') }}</div>{% endif %}
+        {% if f.allowed_mentions %}<div class="muted small">Allowed (won't flag): {{ f.allowed_mentions|join(', ') }}</div>{% endif %}
+        <div class="form-actions">
+          <button class="btn btn-primary" type="submit">Run check</button>
+          <button class="btn" type="submit" formaction="/fact-check/save">Save to Facts Library</button>
+        </div>
+      </form>
+    </div>
+    {% endfor %}
+  {% endif %}
+
+  {# ---------- SYNC FIRST ---------- #}
+  {% if mode == 'sync_first' %}
+    <div class="card">
+      <p>This website hasn't been synced yet — we need to crawl it before checking facts.</p>
+      <form method="post" action="/fact-check/run" id="after-sync">{{ fact_fields(facts[0]) }}
+        <input type="hidden" name="fact_name" value="{{ facts[0].fact_name }}" />
+        <input type="hidden" name="correct_value" value="{{ facts[0].correct_value or '' }}" />
+        <input type="hidden" name="search_terms" value="{{ facts[0].search_terms|join('\n') }}" />
+      </form>
+      <button class="btn btn-primary" onclick="syncThenRun({{ nav.active_site.id }})">Sync website first</button>
+      <span class="muted small" id="sync-msg"></span>
+    </div>
+  {% endif %}
+
+  {# ---------- RESULTS ---------- #}
+  {% if mode == 'results' %}
+    {% set r = result %}{% set c = result.counts %}
+    <div class="summary-strip">
+      Checked <b>{{ r.pages_crawled }}</b> pages · <b>{{ r.mention }}</b> mention this topic ·
+      <b class="danger">{{ c.mismatch }}</b> issues · <b style="color:var(--ok)">{{ c.matches }}</b> correct ·
+      <b>{{ c.unclear + c.unrelated }}</b> unclear
+      {% if r.issues_made %}<span class="muted">· {{ r.issues_made }} saved to Results &amp; Issues</span>{% endif %}
+    </div>
+
+    <div class="results-toolbar">
+      <form method="post" action="/fact-check/save" class="inline">{{ fact_fields(r.fact) }}
+        <input type="hidden" name="fact_name" value="{{ r.fact.fact_name }}" />
+        <input type="hidden" name="correct_value" value="{{ r.fact.correct_value or '' }}" />
+        <input type="hidden" name="search_terms" value="{{ r.terms|join('\n') }}" />
+        <button class="btn btn-sm btn-primary" type="submit">＋ Save to Facts Library</button>
+      </form>
+      <div class="vfilter">
+        {% for v in ['all','mismatch','matches','unclear','unrelated'] %}
+        <button class="chip vf {{ 'active' if v=='all' }}" onclick="filterVerdict(this,'{{ v }}')">{{ v }}</button>{% endfor %}
+      </div>
+    </div>
+
+    {% for row in r.rows[:60] %}
+    <div class="card match-card vrow" data-verdict="{{ row.verdict }}">
+      <div class="match-top">
+        <span class="badge v-{{ row.verdict }}">{{ {'mismatch':'✗ mismatch','matches':'✓ correct','unclear':'? unclear','unrelated':'– unrelated'}.get(row.verdict, row.verdict) }}</span>
+        <a class="url" href="{{ row.url }}" target="_blank" title="{{ row.url }}">{{ row.url|short_url }}</a>
+        {% if row.locale %}<span class="pill">{{ row.locale }}</span>{% endif %}
+        {% if row.hg %}<span class="tag">hg {{ row.hg }}</span>{% endif %}
+      </div>
+      <div class="evidence">…{{ row.snippet|safe }}…</div>
+      {% if row.verdict_reason %}<div class="muted small">{{ row.verdict_reason }}</div>{% endif %}
+      {% if r.fact.correct_value %}<div class="muted small">Should say: <b>{{ r.fact.correct_value }}</b></div>{% endif %}
+      <div class="mark">
+        {% if row.issue_id %}
+        <button class="btn btn-sm" onclick="markIssue({{ row.issue_id }},'fixed',this)">Mark fixed</button>
+        <button class="btn btn-sm" onclick="markIssue({{ row.issue_id }},'ignored',this)">Ignore</button>
+        {% endif %}
+        <a class="btn btn-sm" href="{{ row.url }}" target="_blank">Open page ↗</a>
+      </div>
+    </div>
+    {% else %}
+      <div class="card empty"><p class="muted">No pages mention this topic.</p></div>
+    {% endfor %}
+    {% if r.rows|length > 60 %}<div class="muted small" style="text-align:center;margin-top:8px">Showing 60 of {{ r.rows|length|comma }} matches. All confirmed mismatches are saved in Results &amp; Issues.</div>{% endif %}
+  {% endif %}
+
+  {# ---------- INPUT landing extras ---------- #}
+  {% if mode == 'input' %}
+  <div class="grid-3">
+    <div class="stat"><div class="n">{{ open_facts }}</div><div class="l">Open fact issues</div></div>
+    <div class="stat"><div class="n">{{ rules }}</div><div class="l">Saved fact rules</div></div>
+  </div>
+  {% if recent_queries %}
+  <h2 class="section-h">Recent checks</h2>
+  <div class="card"><ul class="linklist">
+    {% for rq in recent_queries %}
+    <li>
+      <form method="post" action="/fact-check/interpret" class="inline">
+        <input type="hidden" name="text" value="{{ rq.query_text }}{% if rq.correct_value %} — correct: {{ rq.correct_value }}{% endif %}" />
+        <button class="linkbtn" type="submit">{{ rq.query_text }}</button>
+      </form>
+      {% if rq.correct_value %}<span class="muted small">→ {{ rq.correct_value }}</span>{% endif %}
+    </li>{% endfor %}
+  </ul></div>
+  {% endif %}
+  {% endif %}
+</section>
+
+<section data-panel="external" {{ '' if ext_mode else 'hidden' }}>
+  <div class="card">
+    <div class="site-head">
+      <div><b>Checking:</b> {{ brand.brand_name if brand else 'this brand' }}
+        <span class="muted small">(aliases: {{ (brand.aliases[:3]|join(', ')) if brand else '' }}) · <a href="/settings">edit brand profile</a></span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        {% if serp_on %}<form method="post" action="/external/discover" style="display:inline">
+          <button class="btn btn-sm" type="submit">🔍 Discover mentions</button></form>{% endif %}
+        <button class="btn btn-primary btn-sm" onclick="runExternal()">Check external sources</button>
+      </div>
+    </div>
+    <div class="progress" id="ext-prog" style="display:none;margin-top:12px">
+      <div class="bar"><div class="bar-fill" id="ext-fill"></div></div>
+      <div class="muted small" id="ext-msg"></div>
+    </div>
+    {% if not serp_on %}<div class="muted small" style="margin-top:8px">Web discovery is off (no Bright Data key). Add external URLs manually below.</div>{% endif %}
+  </div>
+
+  {% if ext_candidates %}
+  <div class="card">
+    <div class="site-head"><b>Discovered candidates ({{ ext_candidates|length }})</b>
+      <form method="post" action="/external/approve"><input type="hidden" name="approve_all" value="1" />
+        <button class="btn btn-sm btn-primary" type="submit">Approve all</button></form>
+    </div>
+    <p class="muted small">Review before including — only approved pages get checked (we never auto-crawl the open web).</p>
+    <div class="table-card"><table class="tbl"><tbody>
+      {% for c in ext_candidates %}
+      <tr><td><span class="pill">{{ c.domain }}</span></td>
+        <td><a class="url" href="{{ c.url }}" target="_blank" title="{{ c.url }}">{{ c.title or (c.url|short_url) }}</a></td>
+        <td class="row-actions"><form method="post" action="/external/approve" class="inline">
+          <input type="hidden" name="ids" value="{{ c.id }}" /><button class="linkbtn" type="submit">Approve</button></form></td></tr>
+      {% endfor %}
+    </tbody></table></div>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <form method="post" action="/external/add-sources" enctype="multipart/form-data">
+      <label class="field"><span>Add external URLs (reviews, comparisons, forums — one per line)</span>
+        <textarea class="fact-input" name="urls" rows="2" placeholder="https://www.g2.com/products/sds-manager/reviews"></textarea></label>
+      <div class="form-actions"><input type="file" name="file" accept=".txt,.csv" />
+        <button class="btn btn-sm" type="submit">Add sources</button></div>
+    </form>
+    {% if ext_pages %}
+    <div class="muted small" style="margin:8px 0 4px">Sources ({{ ext_pages|length }})</div>
+    <div class="table-card"><table class="tbl"><tbody>
+      {% for p in ext_pages %}
+      <tr><td><span class="pill">{{ p.source_type }}</span></td>
+        <td><a class="url" href="{{ p.external_url if p.external_url else p.url }}" target="_blank" title="{{ p.url }}">{{ p.url|short_url }}</a></td>
+        <td><span class="badge {{ 'status-badge-available' if p.fetch_status=='ok' else 'status-badge-not_available' if p.fetch_status in ['blocked','error'] else 'status-badge-partial' }}">{{ p.fetch_status }}</span>
+          {% if p.fetch_error %}<span class="muted small">{{ p.fetch_error }}</span>{% endif %}</td></tr>
+      {% endfor %}
+    </tbody></table></div>
+    {% endif %}
+  </div>
+
+  <h2 class="section-h">External findings ({{ ext_finding_count or 0 }})</h2>
+  {% if ext_findings %}
+    {% for domain, items in ext_findings.items() %}
+    <div class="card">
+      <div class="site-head"><b>{{ domain }}</b><span class="pill">{{ items|length }} finding(s)</span></div>
+      {% for f in items %}
+      <div class="match-card" style="border:0;box-shadow:none;padding:8px 0;margin:0;border-top:1px solid var(--border)">
+        <div class="match-top">
+          <span class="badge sev-{{ f.severity }}">{{ f.severity }}</span>
+          <span class="pill">{{ f.finding_type|cat_label }}</span>
+          <a class="url" href="{{ f.external_url }}" target="_blank" title="{{ f.external_url }}">{{ f.external_url|short_url }}</a>
+        </div>
+        {% if f.snippet %}<div class="evidence">{{ f.snippet }}</div>{% endif %}
+        {% if f.reason %}<div class="muted small">{{ f.reason }}</div>{% endif %}
+        {% if f.expected %}<div class="muted small">We say: <b>{{ f.expected }}</b>{% if f.fact_rule %} · rule: {{ f.fact_rule }}{% endif %}</div>{% endif %}
+        <div class="finding-actions">
+          <button class="btn btn-sm" onclick="extRecheck({{ f.id }}, this)">↻ Recheck</button>
+          <button class="btn btn-sm" onclick="extMark({{ f.id }},'false_positive',this)">Mark incorrect</button>
+          <button class="btn btn-sm btn-cancel" onclick="extMark({{ f.id }},'delete',this)">Delete</button>
+          <a class="btn btn-sm" href="{{ f.external_url }}" target="_blank">Open page ↗</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="card empty"><p class="muted">No external findings yet. Add sources (or use web discovery) and click <b>Check external sources</b>.</p></div>
+  {% endif %}
+</section>
+{% endblock %}

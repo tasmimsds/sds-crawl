@@ -1,0 +1,296 @@
+# Real product feature list — maintained by the SDS Manager team.
+#
+# AUTO-DRAFTED on 2026-07-20 from the site's own /us/<feature>/ pages, all set
+# to status: available. REVIEW and correct:
+#   - change status to `partial` or `not_available` where appropriate
+#   - fix names/descriptions; add aliases; add anything missing
+# The features LLM pass flags claims about `partial`/`not_available` features
+# and material misdescriptions of `available` ones.
+#
+# status: available | partial | not_available
+
+features:
+- id: archive_sds_for_products_no_longer_in_use
+  name: Managing SDS for products no longer in use
+  description: Archiving SDSs for products that are no longer in use is crucial for historical exposure
+    analysis and compliance. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/archive-sds-for-products-no-longer-in-use/ — confirm
+    status
+- id: automated_hazard_ratings_based_on_h_and_p_statements
+  name: Automated hazard-rating of Safety Data Sheets in your SDS Library
+  description: SDSs are automatically given ratings for Health-, Safety-, and Environmental-hazard based
+    on H- and P-statements | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/automated-hazard-ratings-based-on-h-and-p-statements/
+    — confirm status
+- id: bulk_operations
+  name: Management and update of numerous SDS in a single action
+  description: The bulk operation feature allows actions such as transferring, duplicating, archiving,
+    and approving multiple SDSs simultaneously. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/bulk-operations/ — confirm status
+- id: certifications
+  name: Certificates held by SDS Manager
+  description: Discover SDS Manager’s certifications, reflecting our commitment to data security, compliance,
+    and industry standards. Learn how our certifications ensure regul
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/certifications/ — confirm status
+- id: chemical_approval_processes
+  name: Approval of Safety Data Sheets
+  description: SDS Approval helps you manage which products and chemicals are approved for use in your
+    organization. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/chemical-approval-processes/ — confirm status
+- id: chemical_compliance_dashboard
+  name: Ensure compliance with Chemical Compliance Dashboard
+  description: Elevate your Safety Data Sheet (SDS) management with our comprehensive Chemical Compliance
+    Dashboard. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/chemical-compliance-dashboard/ — confirm status
+- id: chemical_inventory_management
+  name: All-in-One Solution for Chemical Management
+  description: 'Track inventory, approvals and restricted-substance lists across locations. Complete visibility
+    and control over your chemicals with integrated SDS management, '
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/chemical-inventory-management/ — confirm status
+- id: create_risk_assessment_of_chemicals
+  name: Create Chemical Risk Assessment for hazardous products
+  description: Generate Chemical Instruction & Risk Assessment to efficiently educate employees on risks
+    and PPE requirements | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/create-risk-assessment-of-chemicals/ — confirm status
+- id: create_secondary_container_label
+  name: Free GHS-compliant Secondary Container Label Generator
+  description: 100% FREE, no install - Search from 17 million+ SDS database & generate OSHA/GHS-compliant
+    Secondary Container Labels instantly with one click! | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/create-secondary-container-label/ — confirm status
+- id: custom_fields_associated_with_safety_data_sheets
+  name: Group and manage SDS by Custom Fields.
+  description: Custom fields enable the sorting and organization of SDS by allowing you to filter and
+    group them based on specific values assigned. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/custom-fields-associated-with-safety-data-sheets/
+    — confirm status
+- id: effortless_setup
+  name: Effortless Setup
+  description: Our tools, coupled with our database of over 17 million+ SDSs, simplify the process of
+    setting up your online SDS library. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/effortless-setup/ — confirm status
+- id: ehs_software
+  name: Complete Health, Safety & Compliance Management in One Platform
+  description: All-in-one EHS software to manage incidents, audits, risk assessments, and compliance.
+    Keep your workplace safe and audit-ready with SDS Manager's EHS software.
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/ehs-software/ — confirm status
+- id: extract_data_from_safety_data_sheet_sds
+  name: Access to extracted data from Safety Data Sheets
+  description: SDS Manager employs a cutting-edge data extraction technique for Safety Data Sheets (SDS),
+    presenting all SDS content in a structured format. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/extract-data-from-safety-data-sheet-sds/ — confirm
+    status
+- id: features
+  name: Explore the Full Power of SDS Manager
+  description: Discover the features of SDS Manager - a centralized platform for managing Safety Data
+    Sheets, ensuring employee access, and staying compliant with safety regul
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/features/ — confirm status
+- id: find_outdated_sds_in_your_library
+  name: Managing outdated SDSs in your SDS library
+  description: Use the revision year filter feature in SDS Manager to identify SDSs in your library that
+    are older than five years. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/find-outdated-sds-in-your-library/ — confirm status
+- id: find_sds_by_scanning_barcode
+  name: Find Safety Data Sheet by scanning product barcode
+  description: SDS Manager allows for swift retrieval of Safety Data Sheets by enabling barcode scanning
+    via smartphone. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/find-sds-by-scanning-barcode/ — confirm status
+- id: free_chemical_risk_assessment_guide
+  name: 'Free Chemical Risk Assessment Guide: Reduce Hazards and Stay Compliant'
+  description: Download our free Chemical Risk Assessment Guide to identify, assess, and manage chemical
+    hazards at work. Includes step-by-step processes, GHS insights, PPE gu
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/free-chemical-risk-assessment-guide/ — confirm status
+- id: free_text_search_entire_sds
+  name: Free text search in whole SDS
+  description: SDS Manager's free text search feature indexes the entirety of the content within all the
+    Safety Data Sheets in your SDS library. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/free-text-search-entire-sds/ — confirm status
+- id: full_service
+  name: SDS Manager Full-Service
+  description: With our Full-Service option, we will set up your SDS library and help you stay compliant
+    with chemical safety regulations. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/full-service/ — confirm status
+- id: ghs_transport_labels
+  name: GHS Transport Labels
+  description: Generate transport/shipping labels in 12 sizes. Labels feature QR codes, transport pictograms,
+    and PPE icons. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/ghs-transport-labels/ — confirm status
+- id: google_sds_search
+  name: Google SDS Search
+  description: With our integrated Google search, you can easily find SDSs that are not yet in SDS Managers
+    database of 17 million+ SDSs. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/google-sds-search/ — confirm status
+- id: hmis_labels
+  name: HMIS Labels
+  description: Display HMIS labels to enhance workplace safety by visually communicating the hazards associated
+    with chemicals. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/hmis-labels/ — confirm status
+- id: how_to_keep_sds_library_up_to_date
+  name: Maintaining an Up-to-Date SDS Library
+  description: SDS Manager proactively searches thousands of supplier websites for SDS updates, alerting
+    you of any new versions detected in your library. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/how-to-keep-sds-library-up-to-date/ — confirm status
+- id: import_product_lists
+  name: Import product lists
+  description: Build your SDS library by importing a list of chemicals you use. SDS Manager automatically
+    identifies and retrieves matching SDSs. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/import-product-lists/ — confirm status
+- id: import_sds_files
+  name: Import SDS files
+  description: Create your SDS library through direct PDF imports or ZIP file uploads, which automatically
+    organize and populate your library. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/import-sds-files/ — confirm status
+- id: inspection_ready_sds_library
+  name: Inspection ready Safety Data Sheet Library
+  description: Shine at your next Health & Safety review with an up-to-date SDS collection accessible
+    to all employees, proper labeling, and secure SDS archiving. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/inspection-ready-sds-library/ — confirm status
+- id: instant_employee_access
+  name: Instant access to Safety Data Sheets for employees
+  description: Ensure employees have immediate access to SDS in case of an incident with strategically
+    placed QR code posters. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/instant-employee-access/ — confirm status
+- id: job_hazard_analysis
+  name: Create Job Hazard Analysis Reports
+  description: Create Job Hazard Analysis Reports (referred to as COSHH Reports in the UK). Read receipts
+    from assigned employees. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/job-hazard-analysis/ — confirm status
+- id: keep_employees_informed
+  name: Keep employees informed
+  description: Safety information is readily accessible. Hazard details and PPE icons are instantly available,
+    automatically extracted from SDS files. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/keep-employees-informed/ — confirm status
+- id: nfpa_labels
+  name: NFPA Labels
+  description: Display NFPA labels to enhance workplace safety by visually communicating the hazards associated
+    with chemicals. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/nfpa-labels/ — confirm status
+- id: offline_app
+  name: App for Offline access to Safety Data Sheet library
+  description: Our iOS/Android app ensures employees can access your entire SDS library, even without
+    internet connectivity. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/offline-app/ — confirm status
+- id: one_click_access_to_first_aid_info
+  name: One-click access to First-aid information
+  description: Since we extract all information from the SDS files, we provide mobile-friendly access
+    to first-aid details with just one click. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/one-click-access-to-first-aid-info/ — confirm status
+- id: organize_sds_by_locations
+  name: Multi-site setup - Organize SDS library by locations and delegate admi
+  description: Administrative access to the SDS library can be decentralized by granting different levels
+    of access within the location structure. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/organize-sds-by-locations/ — confirm status
+- id: partner_program
+  name: Turn our platform into your growth engine
+  description: Join the SDS Manager Partner Program. Refer or resell our EHS compliance platform, earn
+    recurring revenue and grow your business | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/partner-program/ — confirm status
+- id: photo_feature
+  name: Shoot picture of product labels
+  description: Build your SDS library on your smartphone by taking a photo of the product label. Enables
+    rapid cataloging of products. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/photo-feature/ — confirm status
+- id: request_sds_from_your_vendor
+  name: Email your vendor to request Safety Data Sheets
+  description: If a required SDS is not in our database, use SDS Manager's CRM-like email system to request
+    it directly from your vendor. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/request-sds-from-your-vendor/ — confirm status
+- id: restricted_substance_notifications
+  name: Restricted Substance Notifications
+  description: SDS Manager scrutinizes the ingredient details of your chemicals on SDSs and compares them
+    against restricted substance lists. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/restricted-substance-notifications/ — confirm status
+- id: risk_assessment
+  name: Everything You Need for Chemical Safety — In One Platform
+  description: Perform risk assessments, manage procedures, and give teams mobile access to always up-to-date
+    SDSs. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/risk-assessment/ — confirm status
+- id: safetyculture
+  name: Connect SDS Manager with SafetyCulture
+  description: Enhance SafetyCulture with Safety Data Sheet (SDS) capabilities. Manage your SDS library
+    in SDS Manager and sync SDS documents directly to the SafetyCulture app
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/safetyculture/ — confirm status
+- id: sds_authoring
+  name: SDS AUTHORING SOFTWARE
+  description: Create Safety Data Sheets 10× faster with AI SDS authoring software. Generate, edit, translate,
+    and manage SDS documents in one platform. | US
+  status: available
+  aliases: []
+  notes: auto-drafted from https://sdsmanager.com/us/sds-authoring/ — confirm status

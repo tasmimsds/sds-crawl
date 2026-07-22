@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Fact Check — SDS Manager{% endblock %}
+{% block content %}
+
+<div class="tabs">
+  <button class="tab active" data-tab="internal">Internal Fact Check</button>
+  <button class="tab" data-tab="external">External Fact Check</button>
+</div>
+
+<section data-panel="internal">
+  <div class="card query-card">
+    <form class="query-form" action="/search" method="get">
+      <div class="query-row">
+        <input class="query-input" name="q" placeholder="Search your content for a fact — e.g. “SDS database size”, “free plan claims”, “how many languages”" />
+        <input class="value-input" name="correct_value" placeholder="Correct value (optional) — e.g. 17 million+" />
+        <button class="btn btn-primary" type="submit">Search</button>
+      </div>
+      <p class="muted small">Type a fact to find every page that mentions it, with the exact quote and a match / mismatch verdict.</p>
+    </form>
+  </div>
+
+  <div class="grid-3">
+    <div class="stat"><div class="n">{{ open_facts }}</div><div class="l">Open fact issues</div></div>
+    <div class="stat"><div class="n">{{ rules }}</div><div class="l">Active fact rules</div></div>
+    <div class="stat"><div class="n">{{ sites|length }}</div><div class="l">Websites</div></div>
+  </div>
+
+  <h2 class="section-h">Your websites</h2>
+  {% for s in sites %}
+  <div class="card site-card" data-source="{{ s.row.id }}">
+    <div class="site-head">
+      <div>
+        <div class="site-name">{{ s.row.name or s.row.location }}</div>
+        <div class="muted small">{{ s.row.location }}</div>
+      </div>
+      <div class="site-meta">
+        <span class="pill">{{ s.crawled }} / {{ s.urls }} pages crawled</span>
+        {% if s.job %}<span class="pill pill-{{ s.job.status }}">{{ s.job.status }}</span>{% endif %}
+        <button class="btn btn-sm" onclick="startCrawl({{ s.row.id }}, true)">Re-check site</button>
+      </div>
+    </div>
+    <div class="progress" id="prog-{{ s.row.id }}" style="display:none">
+      <div class="bar"><div class="bar-fill" id="fill-{{ s.row.id }}"></div></div>
+      <div class="muted small" id="msg-{{ s.row.id }}"></div>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
+<section data-panel="external" hidden>
+  <div class="card empty">
+    <h2>External Fact Check</h2>
+    <p class="muted">Coming soon. This will check your claims against outside sources
+      (regulations, standards, competitor pages). Not enabled yet.</p>
+  </div>
+</section>
+
+{% endblock %}

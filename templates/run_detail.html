@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Sync run #{{ job.id }} — SDS Fact Check{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Sync run #{{ job.id }}</h1>
+  <p class="muted">{{ src.name or src.location if src else '' }} · <a href="/">← back to Dashboard</a></p>
+</div>
+
+<div class="card">
+  <div class="sync-stats">
+    <div><b>{{ job.progress }}{% if job.total %}/{{ job.total }}{% endif %}</b><span>pages</span></div>
+    <div><b>{{ job.urls_new or 0 }}</b><span>new</span></div>
+    <div><b>{{ job.urls_changed or 0 }}</b><span>changed</span></div>
+    <div><b>{{ job.urls_removed or 0 }}</b><span>removed</span></div>
+    <div><b class="{{ 'danger' if job.errors }}">{{ job.errors or 0 }}</b><span>errors</span></div>
+    <div><b>{{ job.issues_found or 0 }}</b><span>issues found</span></div>
+    <div><b style="color:var(--ok)">{{ job.issues_fixed or 0 }}</b><span>fixed</span></div>
+  </div>
+  <table class="tbl kv" style="margin-top:14px">
+    <tr><td>Type</td><td>{{ job.type }}</td></tr>
+    <tr><td>Status</td><td><span class="status-dot status-{{ job.status }}">{{ job.status }}</span></td></tr>
+    <tr><td>Started</td><td>{{ job.started_at }}</td></tr>
+    <tr><td>Duration</td><td>{{ fmt_dur(job.started_at, job.finished_at) }}</td></tr>
+    <tr><td>Message</td><td>{{ job.message }}</td></tr>
+    {% if job.error %}<tr><td>Error</td><td class="danger">{{ job.error }}</td></tr>{% endif %}
+  </table>
+</div>
+
+<h2 class="section-h">Pages with errors ({{ err_pages|length }})</h2>
+<div class="card table-card">
+  <table class="tbl">
+    <thead><tr><th>URL</th><th>Status</th><th>Reason</th></tr></thead>
+    <tbody>
+    {% for e in err_pages %}
+      <tr><td><a class="url" href="{{ e.url }}" target="_blank" title="{{ e.url }}">{{ e.url|short_url }}</a></td>
+        <td>{{ e.status_code or '—' }}</td><td class="muted small">{{ e.error or '' }}</td></tr>
+    {% else %}
+      <tr><td colspan="3" class="muted">No page errors in the latest crawl. ✓</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

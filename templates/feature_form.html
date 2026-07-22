@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if feat else 'New' }} feature{% endblock %}
+{% block content %}
+<div class="page-head"><h1>{{ 'Edit' if feat else 'New' }} feature</h1>
+  <p class="muted">Feature claims on your pages are checked against this list.</p></div>
+
+<form method="post" action="/facts/feature/save" class="card stack form-wide">
+  <input type="hidden" name="slug" value="{{ feat.slug if feat else '' }}" />
+  <label class="field"><span>Name</span>
+    <input type="text" name="name" required value="{{ feat.name if feat else '' }}" /></label>
+  <label class="field"><span>Description</span>
+    <input type="text" name="description" value="{{ feat.description if feat else '' }}" /></label>
+  <label class="field"><span>Status</span>
+    <select name="status">
+      {% for s in ['available','partial','not_available'] %}<option value="{{ s }}" {{ 'selected' if feat and feat.status==s }}>{{ s }}</option>{% endfor %}
+    </select></label>
+  <label class="field"><span>Notes</span>
+    <input type="text" name="notes" value="{{ feat.notes if feat else '' }}" /></label>
+  <div class="form-actions">
+    <button class="btn btn-primary" type="submit">Save feature</button>
+    <a class="btn" href="/facts">Cancel</a>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — SDS Fact Check{% endblock %}
+{% block content %}
+<div class="page-head"><h1>{{ title }}</h1>
+  <p class="muted">Click a row for details and actions. Detection can be wrong — recheck, edit, mark incorrect, or delete any finding.</p></div>
+
+{% if scope is defined %}
+<div class="tabs">
+  <a class="tab {{ 'active' if scope=='internal' }}" href="/results?scope=internal">Internal</a>
+  <a class="tab {{ 'active' if scope=='external' }}" href="/results?scope=external">External</a>
+  <a class="tab {{ 'active' if scope=='all' }}" href="/results?scope=all">All</a>
+</div>
+{% endif %}
+
+{% if scope is not defined or scope in ['internal','all'] %}
+<form class="filters" method="get">
+  {% if scope is defined %}<input type="hidden" name="scope" value="{{ scope }}" />{% endif %}
+  <select name="category" onchange="this.form.submit()">
+    <option value="">All sections</option>
+    {% for c in cats %}<option value="{{ c }}" {{ 'selected' if request.query_params.get('category')==c }}>{{ c|cat_label }}</option>{% endfor %}
+  </select>
+  <select name="severity" onchange="this.form.submit()">
+    <option value="">All severities</option>
+    {% for s in ['critical','high','medium','low'] %}<option value="{{ s }}" {{ 'selected' if request.query_params.get('severity')==s }}>{{ s }}</option>{% endfor %}
+  </select>
+  {% if locales %}<select name="locale" onchange="this.form.submit()">
+    <option value="">All locales</option>
+    {% for l in locales %}<option value="{{ l }}" {{ 'selected' if request.query_params.get('locale')==l }}>{{ l }}</option>{% endfor %}
+  </select>{% endif %}
+  <select name="status" onchange="this.form.submit()">
+    {% for st in ['open','fixed','ignored','false_positive','unverifiable'] %}<option value="{{ st }}" {{ 'selected' if request.query_params.get('status','open')==st }}>{{ st.replace('_',' ') }}</option>{% endfor %}
+  </select>
+  <button class="btn btn-sm" type="button" onclick="recheckSection('{{ request.query_params.get('category','') }}')">Recheck this view</button>
+  <span class="muted small" id="bulk-msg"></span>
+</form>
+
+<div class="card table-card">
+  <table class="tbl">
+    <thead><tr><th>Sev</th><th>Section</th><th>URL</th><th>Locale</th><th>Finding</th></tr></thead>
+    <tbody>
+    {% for i in rows %}
+      <tr class="issue-row" id="row-{{ i.id }}" onclick="toggleDetail(this)">
+        <td><span class="badge sev-{{ i.severity }}">{{ i.severity }}</span></td>
+        <td class="muted small">{{ i.category|cat_label }}</td>
+        <td><a class="url" href="{{ i.url }}" target="_blank" title="{{ i.url }}" onclick="event.stopPropagation()">{{ i.url|short_url }}</a></td>
+        <td>{{ i.locale or '' }}</td>
+        <td>{{ i.title|pretty_title }}{% if i.edited %} <span class="pill">edited</span>{% endif %}</td>
+      </tr>
+      <tr class="detail" hidden><td colspan="5">
+        {% if i.detail %}<div class="box">{{ i.detail }}</div>{% endif %}
+        {% if i.evidence %}<div class="box"><b>Quote:</b><div class="evidence">{{ i.evidence }}</div></div>{% endif %}
+        {% if i.expected %}<div class="box"><b>Should say:</b> {{ i.expected }}</div>{% endif %}
+        {% if i.note %}<div class="box muted small">Note: {{ i.note }}</div>{% endif %}
+        <div class="box muted small">{{ i.detection_method }} · status: <span class="st-{{ i.id }}">{{ i.status }}</span>
+          {% if i.last_checked_at %} · last checked {{ reltime(i.last_checked_at) }}{% endif %}</div>
+
+        <div class="finding-actions">
+          <button class="btn btn-sm" onclick="fcRecheck({{ i.id }})">↻ Recheck</button>
+          <button class="btn btn-sm" onclick="toggleBox('edit-{{ i.id }}')">Edit</button>
+          <button class="btn btn-sm" data-id="{{ i.id }}"
+                  data-phrase="{{ (i.evidence or '')|replace('…','')|truncate(50, True, '') }}"
+                  onclick="openFp(this)">Mark incorrect</button>
+          <button class="btn btn-sm btn-cancel" onclick="fcDelete({{ i.id }})">Delete</button>
+          <a class="btn btn-sm" href="{{ i.url }}" target="_blank">Open page ↗</a>
+        </div>
+
+        <form class="edit-box" id="edit-{{ i.id }}" hidden method="post" action="/issues/{{ i.id }}/edit">
+          <select name="severity">{% for s in ['critical','high','medium','low'] %}<option {{ 'selected' if i.severity==s }}>{{ s }}</option>{% endfor %}</select>
+          <select name="category">{% for c in cats %}<option value="{{ c }}" {{ 'selected' if i.category==c }}>{{ c|cat_label }}</option>{% endfor %}</select>
+          <input type="text" name="expected" value="{{ i.expected or '' }}" placeholder="Expected value" />
+          <input type="text" name="note" value="{{ i.note or '' }}" placeholder="Note" />
+          <button class="btn btn-sm btn-primary" type="submit">Save</button>
+        </form>
+
+      </td></tr>
+    {% else %}
+      <tr><td colspan="5" class="muted">No findings. Run a sync from the Dashboard.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if scope in ['external','all'] and ext_rows %}
+<h2 class="section-h">External findings ({{ ext_rows|length }})</h2>
+{% for f in ext_rows %}
+<div class="card match-card">
+  <div class="match-top">
+    <span class="badge sev-{{ f.severity }}">{{ f.severity }}</span>
+    <span class="pill">{{ f.domain }}</span>
+    <span class="pill">{{ f.finding_type|cat_label }}</span>
+    <a class="url" href="{{ f.external_url }}" target="_blank" title="{{ f.external_url }}">{{ f.external_url|short_url }}</a>
+  </div>
+  {% if f.snippet %}<div class="evidence">{{ f.snippet }}</div>{% endif %}
+  {% if f.expected %}<div class="muted small">We say: <b>{{ f.expected }}</b></div>{% endif %}
+  <div class="finding-actions">
+    <button class="btn btn-sm" onclick="extMark({{ f.id }},'fixed',this)">Mark fixed</button>
+    <button class="btn btn-sm" onclick="extMark({{ f.id }},'false_positive',this)">Mark incorrect</button>
+    <button class="btn btn-sm btn-cancel" onclick="extMark({{ f.id }},'delete',this)">Delete</button>
+    <a class="btn btn-sm" href="{{ f.external_url }}" target="_blank">Open page ↗</a>
+  </div>
+</div>
+{% endfor %}
+{% elif scope=='external' %}
+<div class="card empty"><p class="muted">No external findings. Run <b>Check external sources</b> on the Fact Check page.</p></div>
+{% endif %}
+
+<div class="modal-backdrop" id="fp-modal" hidden onclick="if(event.target===this)closeFp()">
+  <div class="modal">
+    <h3>Mark as incorrect</h3>
+    <p class="muted small">This removes the finding from open counts (kept in the DB). Tell us why so we can learn.</p>
+    <input type="hidden" id="fp-id" />
+    <label class="field"><span>Why is this not an issue? (optional)</span>
+      <input type="text" id="fp-reason" placeholder="e.g. this is a legitimate free tool, not the paid product" /></label>
+    <label class="small chk"><input type="checkbox" id="fp-flag" /> Don't flag this pattern again</label>
+    <label class="field" id="fp-phrase-wrap"><span>Phrase to allow (added to the rule)</span>
+      <input type="text" id="fp-phrase" /></label>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="submitFp()">Mark as incorrect</button>
+      <button class="btn" onclick="closeFp()">Cancel</button>
+    </div>
+  </div>
+</div>
+{% endblock %}

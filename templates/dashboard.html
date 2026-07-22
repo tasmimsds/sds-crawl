@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — SDS Fact Check{% endblock %}
+{% block content %}
+<div class="page-head" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+  <div>
+    <h1>Synchronize Dashboard</h1>
+    <p class="muted">See the sync state of every website and re-check with one click.</p>
+  </div>
+  <a class="btn btn-primary" href="/fact-check">＋ New Fact</a>
+</div>
+
+<div class="cards-grid">
+  {% for c in cards %}
+  <div class="card sync-card" data-source="{{ c.row.id }}">
+    <div class="sync-top">
+      <div>
+        <div class="site-name">{{ c.row.name or c.row.location }}</div>
+        <div class="muted small">{{ c.row.kind|capitalize }} · {{ c.row.location }}</div>
+      </div>
+      <span class="status status-{{ c.state }}" id="state-{{ c.row.id }}">
+        {% if c.state=='synced' %}Synced ✓{% elif c.state=='syncing' %}Syncing…
+        {% elif c.state=='needs' %}Needs sync{% else %}Sync failed{% endif %}
+      </span>
+    </div>
+
+    {% if c.state=='needs' %}<div class="muted small note">{{ c.needs_reason }}</div>{% endif %}
+    {% if c.state=='failed' and c.last %}<div class="note err">{{ c.last.message }}</div>{% endif %}
+
+    <div class="sync-stats">
+      <div><b>{{ c.crawled|comma }}</b><span>/ {{ c.total|comma }} pages</span></div>
+      {% if c.last %}
+      <div><b>{{ c.last.urls_new or 0 }}</b><span>new</span></div>
+      <div><b>{{ c.last.urls_changed or 0 }}</b><span>changed</span></div>
+      {% endif %}
+      <div><b class="{{ 'danger' if c.errors }}">{{ c.errors }}</b><span>errors</span></div>
+    </div>
+
+    <div class="muted small">
+      Last synced: <span title="{{ c.last.finished_at if c.last else '' }}">{{ reltime(c.last.finished_at if c.last else None) }}</span>
+    </div>
+
+    <div class="progress" id="prog-{{ c.row.id }}" style="{{ '' if c.state=='syncing' else 'display:none' }}">
+      <div class="bar"><div class="bar-fill" id="fill-{{ c.row.id }}" style="width:{{ (100*c.running.progress/c.running.total)|int if c.running and c.running.total else 0 }}%"></div></div>
+      <div class="muted small" id="msg-{{ c.row.id }}">{{ c.running.message if c.running else '' }}</div>
+    </div>
+
+    <div class="sync-actions">
+      <button class="btn btn-primary btn-sm" id="syncnow-{{ c.row.id }}" onclick="syncSite({{ c.row.id }}, false)">Sync Now</button>
+      <button class="btn btn-sm" id="syncchg-{{ c.row.id }}" onclick="syncSite({{ c.row.id }}, true)">Sync Changes Only</button>
+      <button class="btn btn-sm btn-cancel" id="cancel-{{ c.row.id }}" style="{{ '' if c.state=='syncing' else 'display:none' }}"
+              onclick="cancelSync({{ c.running.id if c.running else 0 }}, {{ c.row.id }})">Cancel</button>
+    </div>
+
+    <form method="post" action="/sites/{{ c.row.id }}/schedule" class="sched-form">
+      <span class="muted small">Auto-sync</span>
+      <select name="mode">
+        <option value="off" {{ 'selected' if not c.sched or c.sched.mode=='off' }}>Off</option>
+        <option value="daily" {{ 'selected' if c.sched and c.sched.mode=='daily' }}>Daily</option>
+        <option value="weekly" {{ 'selected' if c.sched and c.sched.mode=='weekly' }}>Weekly</option>
+      </select>
+      <select name="day_of_week">
+        {% for d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
+        <option value="{{ loop.index0 }}" {{ 'selected' if c.sched and c.sched.day_of_week==loop.index0 }}>{{ d }}</option>{% endfor %}
+      </select>
+      <input type="number" name="hour" min="0" max="23" value="{{ c.sched.hour if c.sched else 3 }}" />
+      <span>:</span>
+      <input type="number" name="minute" min="0" max="59" value="{{ '%02d'|format(c.sched.minute) if c.sched else '00' }}" />
+      <button class="btn btn-sm" type="submit">Save</button>
+    </form>
+    {% if c.sched and c.sched.mode!='off' and c.sched.next_run %}
+    <div class="muted small next-sync">⏱ Next sync: {{ c.sched.next_run[:16].replace('T',' ') }} (local time)</div>
+    {% endif %}
+
+    <div class="ext-summary">
+      🌐 External: <b>{{ c.ext_sources }}</b> sources · <b>{{ c.ext_fetched }}</b> fetched ·
+      <b class="{{ 'danger' if c.ext_findings }}">{{ c.ext_findings }}</b> open findings ·
+      <a href="/fact-check">check ↗</a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if changes %}
+<h2 class="section-h">What changed in the last sync</h2>
+<div class="card">
+  <div class="sync-stats">
+    <div><b>{{ changes.new_urls }}</b><span>new URLs</span></div>
+    <div><b>{{ changes.changed }}</b><span>changed pages</span></div>
+    <div><b>{{ changes.removed }}</b><span>removed URLs</span></div>
+    <div><b style="color:var(--ok)">{{ changes.fixed }}</b><span>issues fixed</span></div>
+  </div>
+  {% if changes.new_issues %}
+  <div class="muted small" style="margin-top:12px">New issues found (click to view):</div>
+  <div class="chips">
+    {% for ni in changes.new_issues %}
+    <a class="chip" href="/results?category={{ ni.category }}">{{ ni.category }} · {{ ni.c }}</a>
+    {% endfor %}
+  </div>
+  {% else %}<div class="muted small" style="margin-top:10px">No new issues in the last sync. 🎉</div>{% endif %}
+</div>
+{% endif %}
+
+<h2 class="section-h">Recent sync activity</h2>
+<div class="card table-card">
+  <table class="tbl">
+    <thead><tr><th>Website</th><th>Type</th><th>Started</th><th>Duration</th><th>Pages</th>
+      <th>New/Chg/Rem</th><th>Errors</th><th>Issues +/fixed</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for j in history %}
+      <tr onclick="location.href='/runs/{{ j.id }}'" style="cursor:pointer">
+        <td>{{ j.sname or j.sloc or '—' }}</td>
+        <td>{{ j.type }}</td>
+        <td title="{{ j.started_at }}">{{ reltime(j.started_at) }}</td>
+        <td>{{ fmt_dur(j.started_at, j.finished_at) }}</td>
+        <td>{{ j.progress }}{% if j.total %}/{{ j.total }}{% endif %}</td>
+        <td>{{ j.urls_new or 0 }}/{{ j.urls_changed or 0 }}/{{ j.urls_removed or 0 }}</td>
+        <td class="{{ 'danger' if j.errors }}">{{ j.errors or 0 }}</td>
+        <td>{{ j.issues_found or 0 }} / {{ j.issues_fixed or 0 }}</td>
+        <td><span class="status-dot status-{{ j.status }}">{{ j.status }}</span></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="muted">No syncs yet. Click <b>Sync Now</b> on a website above.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,27 @@
+# secrets / local config
+.env
+.env.*
+!.env.example
+
+# data & generated output
+data/
+output/
+*.db
+*.sqlite
+*.sqlite3
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.log

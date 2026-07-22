@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Settings — SDS Fact Check{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Settings</h1>
+  <p class="muted">Models, crawl settings, and API status. Edit deeper config in <code>config/settings.yaml</code>.</p></div>
+
+<div class="card">
+  <h2 class="section-h" style="margin-top:0">AI models</h2>
+  <table class="tbl kv">
+    <tr><td>Screening model (fast)</td><td><code>{{ info.fast_model }}</code></td></tr>
+    <tr><td>Verification model (reasoning)</td><td><code>{{ info.reasoning_model }}</code></td></tr>
+    <tr><td>Max LLM calls / run</td><td>{{ info.max_calls }}</td></tr>
+    <tr><td>Max output tokens</td><td>{{ info.max_output }}</td></tr>
+    <tr><td>OpenRouter key</td><td>{{ '✓ present' if info.key_present else '✗ not set (add to .env)' }}</td></tr>
+  </table>
+  <p class="muted small">Override per run with <code>--fast-model</code> / <code>--reasoning-model</code> or the
+    <code>SDS_FAST_MODEL</code> / <code>SDS_REASONING_MODEL</code> env vars.</p>
+</div>
+
+{% if brand %}
+<div class="card">
+  <h2 class="section-h" style="margin-top:0">Brand profile (External Fact Check scope)</h2>
+  <p class="muted small">External findings are scoped to THIS brand. Web discovery is
+    {{ 'on' if info.serp_on else 'off (no Bright Data key)' }}.</p>
+  <form method="post" action="/settings/brand" class="stack form-wide">
+    <label class="field"><span>Brand name</span>
+      <input type="text" name="brand_name" value="{{ brand.brand_name }}" /></label>
+    <label class="field"><span>Aliases (comma-separated)</span>
+      <input type="text" name="aliases" value="{{ brand.aliases|join(', ') }}" /></label>
+    <label class="field"><span>Own domains (excluded from external — comma-separated)</span>
+      <input type="text" name="own_domains" value="{{ brand.own_domains|join(', ') }}" /></label>
+    <label class="field"><span>Disambiguation notes</span>
+      <input type="text" name="disambiguation_notes" value="{{ brand.disambiguation_notes or '' }}" /></label>
+    <label class="field"><span>Competitor names (comma-separated)</span>
+      <input type="text" name="negative_terms" value="{{ brand.negative_terms|join(', ') }}" /></label>
+    <div class="form-actions"><button class="btn btn-primary" type="submit">Save brand profile</button></div>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2 class="section-h" style="margin-top:0">Crawl settings</h2>
+  <table class="tbl kv">
+    <tr><td>Concurrency</td><td>{{ info.crawl.concurrency }}</td></tr>
+    <tr><td>Request timeout</td><td>{{ info.crawl.request_timeout_s }}s</td></tr>
+    <tr><td>Politeness delay</td><td>{{ info.crawl.per_worker_delay_s }}s</td></tr>
+    <tr><td>User agent</td><td><code>{{ info.crawl.user_agent }}</code></td></tr>
+    <tr><td>Primary domain</td><td>{{ info.crawl.primary_domain }}</td></tr>
+  </table>
+</div>
+{% endblock %}

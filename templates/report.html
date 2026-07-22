@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SDS Manager — Internal Audit Report</title>
+<style>
+  :root{--bg:#0f1115;--card:#1a1d24;--border:#2a2f3a;--fg:#e6e9ef;--muted:#9aa4b2;
+    --accent:#4f8cff;--critical:#ff5c5c;--high:#ff9f43;--medium:#ffd93d;--low:#6bcB77}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{padding:18px 26px;border-bottom:1px solid var(--border)}
+  h1{margin:0 0 4px;font-size:19px}
+  h2{font-size:15px;margin:22px 0 10px}
+  .sub{color:var(--muted);font-size:13px}
+  .wrap{padding:18px 26px;max-width:1500px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:8px}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+  .kpi .n{font-size:24px;font-weight:700}
+  .kpi .l{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  .inv{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+  .invcard{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+  .invcard .h{font-weight:600;margin-bottom:6px}
+  .invcard .canon{font-size:11px;color:var(--muted)}
+  .val{display:flex;justify-content:space-between;border-top:1px solid var(--border);padding:4px 0;font-size:13px}
+  .val .b{color:var(--accent)}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
+  select,input{background:var(--card);color:var(--fg);border:1px solid var(--border);
+    border-radius:7px;padding:7px 9px;font-size:13px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-size:11px;text-transform:uppercase;position:sticky;top:0;background:var(--bg)}
+  tr.issue{cursor:pointer} tr.issue:hover{background:#161922}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
+  .sev-critical{background:rgba(255,92,92,.15);color:var(--critical)}
+  .sev-high{background:rgba(255,159,67,.15);color:var(--high)}
+  .sev-medium{background:rgba(255,217,61,.15);color:var(--medium)}
+  .sev-low{background:rgba(107,203,119,.15);color:var(--low)}
+  .cat{color:var(--muted);font-size:12px}
+  .url{color:var(--accent);word-break:break-all}
+  .tag{font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:1px 5px;margin-left:6px}
+  .detail-row td{background:#12151c;color:var(--muted)}
+  .box{margin:4px 0} .box b{color:var(--fg)}
+  code{background:#000;padding:1px 6px;border-radius:4px;color:#cdd6e4}
+  .status-fixed,.status-ignored{opacity:.5}
+  .muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>SDS Manager — Internal Audit Report</h1>
+  <div class="sub" id="meta"></div>
+</header>
+<div class="wrap">
+  <div class="cards" id="cards"></div>
+
+  <h2>Site-wide claim inventory <span class="muted" style="font-size:12px">— decide canonical values for language/region counts here</span></h2>
+  <div class="inv" id="inv"></div>
+
+  <h2 id="ext-h" style="display:none">External findings <span class="muted" style="font-size:12px">— what other websites say about us (SERP)</span></h2>
+  <div id="external"></div>
+
+  <h2>Issues</h2>
+  <div class="filters">
+    <select id="f-cat"><option value="">All categories</option></select>
+    <select id="f-sev"><option value="">All severities</option></select>
+    <select id="f-loc"><option value="">All locales</option></select>
+    <select id="f-hg"><option value="">All hreflang groups</option></select>
+    <select id="f-status"><option value="open">Open</option><option value="">All</option>
+      <option value="fixed">Fixed</option><option value="ignored">Ignored</option></select>
+    <input id="f-q" placeholder="Search url / quote / title…" style="flex:1;min-width:200px" />
+    <span class="muted" id="count"></span>
+  </div>
+  <table>
+    <thead><tr><th>Sev</th><th>Category</th><th>URL</th><th>Locale</th><th>Issue</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<script>
+const DATA = {{ payload_json | safe }};
+const SEV={critical:0,high:1,medium:2,low:3};
+const $=s=>document.querySelector(s);
+const esc=s=>(s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+document.getElementById("meta").textContent =
+  `${DATA.source.name||DATA.source.location} · generated ${DATA.generated_at} · `
+  + `${DATA.summary.urls} URLs crawled · ${DATA.issues.length} issues total`;
+
+(function cards(){
+  const s=DATA.summary, c=s.by_category;
+  const list=[["URLs",s.urls],["Open",s.open],["Critical",s.by_severity.critical||0],
+    ["High",s.by_severity.high||0],["DB size",c.database_size||0],["Positioning",c.positioning||0],
+    ["Free claims",c.free_claim||0],["Lang/Region",(c.language_count||0)+(c.region_count||0)],
+    ["Features",c.feature_claim||0],["FAQ",c.faq||0],["Cannibalization",c.cannibalization||0],
+    ["Fixed",s.fixed]];
+  $("#cards").innerHTML=list.map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+})();
+
+(function inventory(){
+  $("#inv").innerHTML = DATA.inventory.map(inv=>{
+    const canon = inv.category ? `canonical: ${inv.canonical==null?'<b style="color:var(--high)">not set — decide</b>':esc(inv.canonical)}` : "inventory only";
+    const vals = inv.values.slice(0,12).map(v=>
+      `<div class="val"><span>${esc(v.value)}</span><span class="b">${v.count} page(s)</span></div>`).join("");
+    return `<div class="invcard"><div class="h">${esc(inv.label)}</div>`
+      +`<div class="canon">${canon}</div>${vals}</div>`;
+  }).join("") || '<div class="muted">No claims inventoried yet.</div>';
+})();
+
+(function external(){
+  const ext = DATA.external || [];
+  if(!ext.length) return;
+  document.getElementById("ext-h").style.display="";
+  const vcol={matches:"var(--low)",positive:"var(--low)",mismatch:"var(--critical)",negative:"var(--critical)"};
+  document.getElementById("external").innerHTML = ext.map(e=>{
+    const v=e.verdict||""; const c=vcol[v]||"var(--muted)";
+    return `<div class="invcard" style="margin-bottom:8px">`
+      +`<div><span class="pill" style="color:${c};border-color:${c}">${esc(v||e.kind)}</span> `
+      +`<span class="muted">${esc(e.domain||"")}</span> — <a href="${esc(e.external_url)}" target="_blank">${esc(e.title||e.external_url)}</a></div>`
+      +(e.snippet?`<div class="val" style="display:block">${esc(e.snippet)}</div>`:"")
+      +(e.reason?`<div class="muted" style="font-size:12px">${esc(e.reason)}</div>`:"")
+      +(e.expected?`<div class="muted" style="font-size:12px">We say: ${esc(e.expected)}</div>`:"")
+      +`</div>`;
+  }).join("");
+})();
+
+function fill(id,vals){const el=$(id);vals.filter(Boolean).forEach(v=>el.insertAdjacentHTML("beforeend",`<option value="${esc(v)}">${esc(v)}</option>`));}
+fill("#f-cat",[...new Set(DATA.issues.map(i=>i.category))].sort());
+fill("#f-sev",["critical","high","medium","low"]);
+fill("#f-loc",[...new Set(DATA.issues.map(i=>i.locale).filter(Boolean))].sort());
+fill("#f-hg",[...new Set(DATA.issues.map(i=>i.hg).filter(x=>x!=null))].sort((a,b)=>a-b));
+
+function render(){
+  const f={cat:$("#f-cat").value,sev:$("#f-sev").value,loc:$("#f-loc").value,
+    hg:$("#f-hg").value,st:$("#f-status").value,q:$("#f-q").value.toLowerCase().trim()};
+  const rows=DATA.issues.filter(i=>
+    (!f.cat||i.category===f.cat)&&(!f.sev||i.severity===f.sev)&&
+    (!f.loc||i.locale===f.loc)&&(!f.hg||String(i.hg)===f.hg)&&
+    (!f.st||i.status===f.st)&&
+    (!f.q||((i.url+" "+i.title+" "+(i.evidence||"")+" "+(i.detail||"")).toLowerCase().includes(f.q)))
+  ).sort((a,b)=>(SEV[a.severity]-SEV[b.severity])||a.url.localeCompare(b.url));
+  $("#count").textContent=rows.length+" shown";
+  const tb=$("#rows");tb.innerHTML="";
+  for(const i of rows){
+    const tr=document.createElement("tr");tr.className="issue status-"+i.status;
+    tr.innerHTML=`<td><span class="pill sev-${i.severity}">${i.severity}</span></td>`
+      +`<td class="cat">${esc(i.category)}</td><td class="url">${esc(i.url)}</td>`
+      +`<td>${esc(i.locale||"")}${i.hg!=null?`<span class="tag">hg ${i.hg}</span>`:""}</td>`
+      +`<td>${esc(i.title)}</td>`;
+    const d=document.createElement("tr");d.className="detail-row";d.style.display="none";
+    d.innerHTML=`<td colspan="5">`
+      +(i.detail?`<div class="box">${esc(i.detail)}</div>`:"")
+      +(i.evidence?`<div class="box"><b>Quote:</b> <code>${esc(i.evidence)}</code></div>`:"")
+      +(i.expected?`<div class="box"><b>Should say:</b> ${esc(i.expected)}</div>`:"")
+      +(i.related_url?`<div class="box"><b>Related:</b> <span class="url">${esc(i.related_url)}</span></div>`:"")
+      +`<div class="box muted">detection: ${esc(i.detection_method)} · status ${esc(i.status)} · id ${i.id}`
+      +(i.hg!=null?` · hreflang group ${i.hg}`:"")+`</div></td>`;
+    tr.onclick=()=>{d.style.display=d.style.display==="none"?"table-row":"none";};
+    tb.appendChild(tr);tb.appendChild(d);
+  }
+}
+["f-cat","f-sev","f-loc","f-hg","f-status"].forEach(id=>$("#"+id).addEventListener("change",render));
+$("#f-q").addEventListener("input",render);
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}SDS Fact Check{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css?v=11" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="/">🛡️ <span class="brand-txt">SDS Fact Check</span></a>
+
+    <div class="site-switch">
+      {% if nav.sources %}
+      <select onchange="switchSite(this.value)" title="Active website">
+        {% for s in nav.sources %}
+        <option value="{{ s.id }}" {{ 'selected' if nav.active_site and s.id==nav.active_site.id else '' }}>
+          {{ s.name or s.location }}
+        </option>
+        {% endfor %}
+      </select>
+      {% else %}
+      <div class="muted small pad">No website yet</div>
+      {% endif %}
+    </div>
+
+    <nav class="side-nav">
+      <div class="grp">Main</div>
+      <a href="/" class="{{ 'active' if active=='dashboard' }}"><i>⌂</i><span>Dashboard</span></a>
+      <a href="/fact-check" class="{{ 'active' if active=='factcheck' }}"><i>✓</i><span>Fact Check</span>
+        {% if nav.failing_rules %}<b class="badge-count">{{ nav.failing_rules }}</b>{% endif %}</a>
+      <a href="/results" class="{{ 'active' if active=='results' }}"><i>▤</i><span>Results &amp; Issues</span>
+        {% if nav.open_issues %}<b class="badge-count">{{ nav.open_issues }}</b>{% endif %}</a>
+      <a href="/facts" class="{{ 'active' if active=='facts' }}"><i>☰</i><span>Facts Library</span></a>
+
+      <div class="grp">Site</div>
+      <a href="/site-health" class="{{ 'active' if active=='health' }}"><i>♥</i><span>Site Health</span>
+        {% if nav.health_errors %}<b class="badge-count warn">{{ nav.health_errors }}</b>{% endif %}</a>
+      <a href="/reports" class="{{ 'active' if active=='reports' }}"><i>⇩</i><span>Reports &amp; Exports</span></a>
+
+      <div class="grp">System</div>
+      <a href="/add-site" class="{{ 'active' if active=='add' }}"><i>+</i><span>Add Website</span></a>
+      <a href="/settings" class="{{ 'active' if active=='settings' }}"><i>⚙</i><span>Settings</span></a>
+    </nav>
+  </aside>
+
+  <main class="content">
+    {% if nav.sources or active=='add' %}
+      {% block content %}{% endblock %}
+    {% else %}
+      <div class="center-card"><div class="card empty">
+        <h2>Add your website to start fact-checking</h2>
+        <p class="muted">Once you add a website, every page here works on it.</p>
+        <a href="/add-site" class="btn btn-primary">+ Add Website</a>
+      </div></div>
+    {% endif %}
+  </main>
+</div>
+<script src="/static/app.js?v=11"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

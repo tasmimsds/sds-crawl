@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Reports & Exports — SDS Fact Check{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Reports &amp; Exports</h1>
+  <p class="muted">Export the findings for the active website.</p></div>
+
+<div class="card">
+  <button class="btn btn-primary" onclick="runExport()">Generate report + CSVs</button>
+  <span class="muted small" id="export-msg" style="margin-left:10px"></span>
+</div>
+
+{% if html_files %}
+<h2 class="section-h">Recent reports</h2>
+<div class="card">
+  <ul class="linklist">
+    {% for f in html_files %}<li><a href="/output/{{ f }}" target="_blank">{{ f }}</a></li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if csv_files %}
+<h2 class="section-h">CSV exports</h2>
+<div class="card">
+  <ul class="linklist">
+    {% for f in csv_files %}<li><a href="/output/{{ f }}" download>{{ f }}</a></li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<script>
+async function runExport(){
+  const m=document.getElementById('export-msg'); m.textContent='Generating…';
+  const r=await fetch('/reports/export',{method:'POST'}); const j=await r.json();
+  if(j.html){ m.innerHTML='Done — <a href="'+j.html+'" target="_blank">open report ↗</a>'; }
+  else { m.textContent='Error: '+(j.error||'failed'); }
+}
+</script>
+{% endblock %}

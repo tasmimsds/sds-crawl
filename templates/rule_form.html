@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if rule else 'New' }} fact rule{% endblock %}
+{% block content %}
+<div class="page-head"><h1>{{ 'Edit' if rule else 'New' }} fact rule</h1>
+  <p class="muted">A rule checks your pages for a fact. Simple version: fill in the name and correct value.
+    For patterns, put one per line.</p></div>
+
+<form method="post" action="/facts/rule/save" class="card stack form-wide">
+  <input type="hidden" name="slug" value="{{ rule.slug if rule else '' }}" />
+  <label class="field"><span>Name</span>
+    <input type="text" name="name" required value="{{ rule.name if rule else '' }}" placeholder="e.g. SDS database size" /></label>
+  <label class="field"><span>Description</span>
+    <input type="text" name="description" value="{{ rule.description if rule else '' }}" /></label>
+
+  <div class="row2">
+    <label class="field"><span>Rule type</span>
+      <select name="rule_type">
+        {% for t in ['stale','inventory','query'] %}<option value="{{ t }}" {{ 'selected' if rule and rule.rule_type==t }}>{{ t }}</option>{% endfor %}
+      </select></label>
+    <label class="field"><span>Category</span>
+      <select name="category">
+        {% for c in cats %}<option value="{{ c }}" {{ 'selected' if rule and rule.category==c }}>{{ c }}</option>{% endfor %}
+      </select></label>
+  </div>
+
+  <div class="row2">
+    <label class="field"><span>Correct value (what it should say)</span>
+      <input type="text" name="correct_value" value="{{ rule.correct_value if rule else '' }}" placeholder="e.g. 17 million+" /></label>
+    <label class="field"><span>Severity</span>
+      <select name="severity">
+        {% for s in ['critical','high','medium','low'] %}<option value="{{ s }}" {{ 'selected' if rule and rule.severity==s else ('selected' if not rule and s=='high') }}>{{ s }}</option>{% endfor %}
+      </select></label>
+  </div>
+
+  <details class="advanced"><summary>Advanced patterns (regex / terms, one per line)</summary>
+    <label class="field"><span>Stale patterns — wrong/outdated values to flag</span>
+      <textarea name="stale_patterns" rows="3">{{ (rule.stale_patterns|fromjson)|join('\n') if rule else '' }}</textarea></label>
+    <label class="field"><span>Allowed patterns — skip a hit if these are nearby</span>
+      <textarea name="allowed_patterns" rows="2">{{ (rule.allowed_patterns|fromjson)|join('\n') if rule else '' }}</textarea></label>
+    <label class="field"><span>Claim patterns (inventory) — capture group 1 = the value</span>
+      <textarea name="claim_patterns" rows="2">{{ (rule.claim_patterns|fromjson)|join('\n') if rule else '' }}</textarea></label>
+    <label class="field"><span>Require context — a hit only counts if one of these is near</span>
+      <textarea name="require_context" rows="2">{{ (rule.require_context|fromjson)|join('\n') if rule else '' }}</textarea></label>
+    <label class="field"><span>Search terms (query rules)</span>
+      <textarea name="search_terms" rows="2">{{ (rule.search_terms|fromjson)|join('\n') if rule else '' }}</textarea></label>
+  </details>
+
+  <div class="row2">
+    <label class="field"><span>Applies to</span>
+      <select name="applies_to">
+        {% for a in ['all','english_only'] %}<option value="{{ a }}" {{ 'selected' if rule and rule.applies_to==a }}>{{ a }}</option>{% endfor %}
+      </select></label>
+    <div></div>
+  </div>
+
+  <div class="form-actions">
+    <button class="btn btn-primary" type="submit">Save rule</button>
+    <a class="btn" href="/facts">Cancel</a>
+  </div>
+</form>
+{% endblock %}
