@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Match Matrix — SDS Fact Check{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Match Matrix</h1>
+  <p class="muted">Every provided fact vs the site: where it's stated correctly (✓), contradicted (✗),
+    or ambiguous (?). {{ src.name if src }} — click any count to see the pages and quotes.</p>
+</div>
+
+<div class="card table-card">
+  <table class="tbl">
+    <thead><tr><th>Fact</th><th>Product</th><th>Correct value</th>
+      <th class="num">✓ Positive</th><th class="num">✗ Issues</th><th class="num">? Unclear</th>
+      <th class="num">Pages mentioning</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><b>{{ (r.name or r.slug)|truncate(52, True, '…') }}</b><div class="muted small">{{ r.slug }}</div></td>
+        <td class="muted small">{{ r.product or 'company-wide' }}</td>
+        <td class="muted small">{{ (r.correct_value or '—')|truncate(40, True, '…') }}</td>
+        <td class="num">{% if r.pos %}<a class="pos" href="?rule={{ r.pk }}&verdict=positive">{{ r.pos }}</a>{% else %}0{% endif %}</td>
+        <td class="num">{% if r.iss %}<a class="danger" href="?rule={{ r.pk }}&verdict=issue">{{ r.iss }}</a>{% else %}0{% endif %}</td>
+        <td class="num">{% if r.unc %}<a class="warn" href="?rule={{ r.pk }}&verdict=unclear">{{ r.unc }}</a>{% else %}0{% endif %}</td>
+        <td class="num muted">{{ r.total or 0 }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">No matches yet — run a sync from the Dashboard.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if drill %}
+<h2 class="section-h">
+  {{ drill.name }} —
+  {% if drill.verdict=='positive' %}<span class="pos">✓ correctly stated</span>
+  {% elif drill.verdict=='issue' %}<span class="danger">✗ issues</span>
+  {% else %}<span class="warn">? unclear</span>{% endif %}
+  ({{ drill.pages|length }})
+</h2>
+<div class="card table-card">
+  <table class="tbl">
+    <thead><tr><th>Page</th><th>Found value</th><th>Quote</th></tr></thead>
+    <tbody>
+    {% for pg in drill.pages %}
+      <tr>
+        <td><a class="url" href="{{ pg.url }}" target="_blank" title="{{ pg.url }}">{{ pg.url|short_url }}</a></td>
+        <td>{{ pg.matched_value or '—' }}</td>
+        <td class="muted small">{{ (pg.evidence or '')|truncate(140, True, '…') }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3" class="muted">No pages.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

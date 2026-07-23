@@ -26,22 +26,48 @@
     {% if c.state=='needs' %}<div class="muted small note">{{ c.needs_reason }}</div>{% endif %}
     {% if c.state=='failed' and c.last %}<div class="note err">{{ c.last.message }}</div>{% endif %}
 
-    <div class="sync-stats">
-      <div><b>{{ c.crawled|comma }}</b><span>/ {{ c.total|comma }} pages</span></div>
-      {% if c.last %}
-      <div><b>{{ c.last.urls_new or 0 }}</b><span>new</span></div>
-      <div><b>{{ c.last.urls_changed or 0 }}</b><span>changed</span></div>
-      {% endif %}
-      <div><b class="{{ 'danger' if c.errors }}">{{ c.errors }}</b><span>errors</span></div>
+    {% set pp = c.pipe %}
+    <div class="pipeline" id="pipe-{{ c.row.id }}" data-source="{{ c.row.id }}"
+         data-jobid="{{ pp.job_id or '' }}">
+      {# ---- Stage 1: CRAWL ---- #}
+      <div class="pstage st-{{ pp.s1.status }}" data-stage="1"
+           onclick="{% if pp.job_id %}location.href='/runs/{{ pp.job_id }}'{% endif %}">
+        <div class="pstage-head"><span class="pnum">1</span> CRAWL</div>
+        <div class="pbig" data-k="s1main">{{ pp.s1.crawled|comma }} / {{ pp.s1.total|comma }} URLs</div>
+        <div class="pstatus" data-k="s1status"></div>
+        <div class="psmall" data-k="s1err">{{ pp.s1.errors }} errors</div>
+        <div class="pbar"><div class="pbar-fill" data-k="s1fill"></div></div>
+      </div>
+      <div class="parrow st-{{ pp.s1.status }}" data-arrow="1"><span>&#9654;</span></div>
+      {# ---- Stage 2: READ ---- #}
+      <div class="pstage st-{{ pp.s2.status }}" data-stage="2"
+           onclick="{% if pp.job_id %}location.href='/runs/{{ pp.job_id }}'{% endif %}">
+        <div class="pstage-head"><span class="pnum">2</span> READ</div>
+        <div class="pbig" data-k="s2main">{{ pp.s2.read|comma }} pages read</div>
+        <div class="pstatus" data-k="s2status"></div>
+        <div class="psmall" data-k="s2unread">{{ pp.s2.unreadable }} unreadable</div>
+        <div class="psmall" data-k="s2claims">{{ pp.s2.claims|comma }} claims</div>
+      </div>
+      <div class="parrow st-{{ pp.s2.status }}" data-arrow="2"><span>&#9654;</span></div>
+      {# ---- Stage 3: MATCH ---- #}
+      <div class="pstage st-{{ pp.s3.status }}" data-stage="3"
+           onclick="location.href='/sites/{{ c.row.id }}/matrix'">
+        <div class="pstage-head"><span class="pnum">3</span> MATCH</div>
+        <div class="pbig" data-k="s3main">{{ pp.s3.facts }} facts checked</div>
+        <div class="pstatus" data-k="s3status"></div>
+        <div class="psmall pos" data-k="s3pos">✓ {{ pp.s3.positive|comma }} positive</div>
+        <div class="psmall danger" data-k="s3iss">✗ {{ pp.s3.issues|comma }} issues</div>
+        <div class="psmall warn" data-k="s3unc">? {{ pp.s3.unclear|comma }} unclear</div>
+      </div>
     </div>
 
-    <div class="muted small">
-      Last synced: <span title="{{ c.last.finished_at if c.last else '' }}">{{ reltime(c.last.finished_at if c.last else None) }}</span>
-    </div>
-
-    <div class="progress" id="prog-{{ c.row.id }}" style="{{ '' if c.state=='syncing' else 'display:none' }}">
-      <div class="bar"><div class="bar-fill" id="fill-{{ c.row.id }}" style="width:{{ (100*c.running.progress/c.running.total)|int if c.running and c.running.total else 0 }}%"></div></div>
-      <div class="muted small" id="msg-{{ c.row.id }}">{{ c.running.message if c.running else '' }}</div>
+    {% if pp.scope_label %}<div class="muted small"><span class="pill">{{ pp.scope_label }}</span></div>{% endif %}
+    <div class="pipe-summary" id="pipesum-{{ c.row.id }}">
+      {% if pp.last_finished %}Last check {{ reltime(pp.last_finished) }} —
+        {{ pp.s1.crawled|comma }} pages crawled, {{ pp.s3.facts }} facts checked,
+        <b class="danger">{{ pp.s3.issues|comma }}</b> problems found,
+        <b class="pos">{{ pp.s3.positive|comma }}</b> places where facts are correctly stated.
+      {% else %}Not synced yet — click <b>Sync Now</b> to run the pipeline.{% endif %}
     </div>
 
     <div class="sync-actions">
@@ -70,6 +96,8 @@
     {% if c.sched and c.sched.mode!='off' and c.sched.next_run %}
     <div class="muted small next-sync">⏱ Next sync: {{ c.sched.next_run[:16].replace('T',' ') }} (local time)</div>
     {% endif %}
+    <div class="muted small">Scheduled runs use your saved scope: <b>{{ c.saved_scope }}</b>
+      <span class="muted">— change it via Sync Now → options.</span></div>
 
     <div class="ext-summary">
       🌐 External: <b>{{ c.ext_sources }}</b> sources · <b>{{ c.ext_fetched }}</b> fetched ·
@@ -100,16 +128,24 @@
 </div>
 {% endif %}
 
+<div class="modal-backdrop" id="run-modal" hidden onclick="if(event.target===this)closeRun()">
+  <div class="modal run-modal">
+    <h3 id="run-modal-title">Start a check</h3>
+    <div id="run-modal-body"><p class="muted small">Loading options…</p></div>
+  </div>
+</div>
+
 <h2 class="section-h">Recent sync activity</h2>
 <div class="card table-card">
   <table class="tbl">
-    <thead><tr><th>Website</th><th>Type</th><th>Started</th><th>Duration</th><th>Pages</th>
+    <thead><tr><th>Website</th><th>Type</th><th>Scope</th><th>Started</th><th>Duration</th><th>Pages</th>
       <th>New/Chg/Rem</th><th>Errors</th><th>Issues +/fixed</th><th>Status</th></tr></thead>
     <tbody>
     {% for j in history %}
       <tr onclick="location.href='/runs/{{ j.id }}'" style="cursor:pointer">
         <td>{{ j.sname or j.sloc or '—' }}</td>
         <td>{{ j.type }}</td>
+        <td class="muted small">{{ j.scope_label or '—' }}</td>
         <td title="{{ j.started_at }}">{{ reltime(j.started_at) }}</td>
         <td>{{ fmt_dur(j.started_at, j.finished_at) }}</td>
         <td>{{ j.progress }}{% if j.total %}/{{ j.total }}{% endif %}</td>
@@ -119,7 +155,7 @@
         <td><span class="status-dot status-{{ j.status }}">{{ j.status }}</span></td>
       </tr>
     {% else %}
-      <tr><td colspan="9" class="muted">No syncs yet. Click <b>Sync Now</b> on a website above.</td></tr>
+      <tr><td colspan="10" class="muted">No syncs yet. Click <b>Sync Now</b> on a website above.</td></tr>
     {% endfor %}
     </tbody>
   </table>

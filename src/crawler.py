@@ -12,7 +12,7 @@ from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt,
 from .config import settings
 from .db import add_faq, clear_faqs, fts_index_url, now_iso
 from .extractor import extract
-from .util import host_of
+from .util import host_excluded, host_of
 
 _REDIRECT_CODES = {301, 302, 303, 307, 308}
 
@@ -115,17 +115,33 @@ async def _fetch(client, start_url, on_throttle, max_hops, retries, base_delay):
 
 
 async def crawl_source(conn, source_id, *, only_changed=False, limit=None, concurrency=None,
-                       on_progress=None):
+                       on_progress=None, locales=None):
+    from .db import source_domain
     c = settings()["crawl"]
-    primary = c["primary_domain"]
+    # per-project domain gate: crawl THIS project's own domain (not a global default)
+    primary = source_domain(conn, source_id) or c["primary_domain"]
     conc = concurrency or c["concurrency"]
 
     rows = conn.execute(
-        "SELECT id, url, lastmod, last_crawled FROM urls WHERE source_id=? AND in_source=1 ORDER BY id",
+        "SELECT id, url, lastmod, last_crawled, locale FROM urls WHERE source_id=? AND in_source=1 ORDER BY id",
         (source_id,),
     ).fetchall()
-    # Only crawl the primary domain; external alternates are recorded, not fetched.
-    rows = [r for r in rows if (host_of(r["url"]) or "").endswith(primary)]
+    # Only crawl the project's own domain; external alternates are recorded, not fetched.
+    # Never crawl excluded hosts (e.g. admin55.sdsmanager.com).
+    exclude = c.get("exclude_hosts") or []
+    rows = [r for r in rows if (host_of(r["url"]) or "").endswith(primary)
+            and not host_excluded(r["url"], exclude)]
+
+    # Locale scope filter — applied BEFORE fetching, so excluded locales cost nothing
+    # (no request, no extraction, no LLM). `locales` = allowed locale codes; '(root)'
+    # covers no-locale/root pages (always kept unless explicitly excluded). None = all.
+    if locales is not None:
+        allow = set(locales)
+        root_ok = "(root)" in allow
+        before = len(rows)
+        rows = [r for r in rows if (r["locale"] in allow) or (r["locale"] is None and root_ok)]
+        print(f"Locale scope: crawling {len(rows)} of {before} URLs "
+              f"(locales: {', '.join(sorted(allow)) or 'none'}).")
 
     skipped = 0
     if only_changed:

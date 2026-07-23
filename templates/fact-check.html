@@ -52,6 +52,11 @@
           <label class="field"><span>Correct value {% if not f.correct_value %}<b class="warn">— which value is correct?</b>{% endif %}</span>
             <input type="text" name="correct_value" value="{{ f.correct_value or '' }}"
               placeholder="{{ 'Leave blank to just search' if not f.correct_value else '' }}" /></label>
+          <label class="field"><span>Product{% if f.product_name %} <span class="pill">auto: {{ f.product_name }}</span>{% endif %}</span>
+            <select name="product_id">
+              <option value="">Any / company-wide</option>
+              {% for p in products %}<option value="{{ p.id }}" {{ 'selected' if f.product_id==p.id }}>{{ p.name }}</option>{% endfor %}
+            </select></label>
         </div>
         <div class="muted small">Searching for (edit chips):</div>
         <div class="chips-edit">
@@ -88,9 +93,11 @@
   {% if mode == 'results' %}
     {% set r = result %}{% set c = result.counts %}
     <div class="summary-strip">
-      Checked <b>{{ r.pages_crawled }}</b> pages · <b>{{ r.mention }}</b> mention this topic ·
-      <b class="danger">{{ c.mismatch }}</b> issues · <b style="color:var(--ok)">{{ c.matches }}</b> correct ·
-      <b>{{ c.unclear + c.unrelated }}</b> unclear
+      Checked <b>{{ r.pages_crawled }}</b> pages ·
+      <b class="clickcount" onclick="filterVerdictAll()">{{ r.mention }}</b> mention this topic ·
+      <b class="danger clickcount" onclick="filterVerdictBtn('mismatch')">{{ c.mismatch }}</b> issues ·
+      <b class="clickcount" style="color:var(--ok)" onclick="filterVerdictBtn('matches')">{{ c.matches }}</b> correct ·
+      <b class="clickcount" onclick="filterVerdictBtn('unclear')">{{ c.unclear + c.unrelated }}</b> unclear
       {% if r.issues_made %}<span class="muted">· {{ r.issues_made }} saved to Results &amp; Issues</span>{% endif %}
     </div>
 
@@ -99,6 +106,7 @@
         <input type="hidden" name="fact_name" value="{{ r.fact.fact_name }}" />
         <input type="hidden" name="correct_value" value="{{ r.fact.correct_value or '' }}" />
         <input type="hidden" name="search_terms" value="{{ r.terms|join('\n') }}" />
+        <input type="hidden" name="product_id" value="{{ r.fact.product_id or '' }}" />
         <button class="btn btn-sm btn-primary" type="submit">＋ Save to Facts Library</button>
       </form>
       <div class="vfilter">

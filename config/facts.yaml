@@ -1,62 +1,48 @@
 # SOURCE OF TRUTH registry — maintained by the SDS Manager team.
 #
-# Two kinds of entries (field `type`):
+# ONE project (sdsmanager.com) with multiple PRODUCTS. Each fact may be tagged to a
+# product via `product:` (the product NAME; omit for company-wide). Products are seeded
+# by migrate (_PRODUCT_SEED): "SDS Manager" (default) and "ExactSDS".
+#
+# Rule types (field `type`):
 #   type: stale      -> stale_patterns raise an issue; current_value is the fix.
-#   type: inventory  -> claim_patterns are inventoried site-wide; when
-#                       canonical_value is set, non-matching pages are flagged.
+#                       With NO patterns it is data-only: read by the LLM pass and by
+#                       the product analyzer (languages/regulations are classified there).
+#   type: inventory  -> claim_patterns are inventoried site-wide; canonical_value flags
+#                       non-matching pages (free, deterministic). Single exact value only.
 #
-# Common fields:
-#   id, category, type, description, severity, applies_to (all | english_only), notes
-#
-# stale-type fields:
-#   current_value      canonical value (shown as "expected")
-#   current_patterns   regex matching the CORRECT value (informational)
-#   stale_patterns     regex matching WRONG/outdated values -> issue
-#   require_context    (optional) at least one must match within ±context_window
-#                      of the hit, else skip (kills off-topic matches)
-#   allowed_patterns   (optional) if any matches within ±context_window, SKIP the
-#                      hit (e.g. "free trial" is allowed near a "free" mention)
-#   context_window     chars each side for require_context / allowed_patterns
-#
-# inventory-type fields:
-#   claim_patterns     regex with capture group 1 = the number/value to inventory
-#   canonical_value    null until you decide; when set, mismatches are flagged
+# NOTE: language & regulation counts DIFFER by product and by context, so they are NOT
+# plain exact-match rules — src/analysis/products.py classifies each claim by the context
+# around it (ExactSDS / SDS-document / inventory-platform) and emits UNCLEAR when a bare
+# "N languages" has no single clear context.
 #
 # Regex is Python `re`, matched case-insensitively.
 
 facts:
-  # ---- Issue 1: SDS database size --------------------------------------
+  # ==================================================================
+  # Company / SDS Manager platform facts
+  # ==================================================================
   - id: sds_database_size
     category: database_size
     type: stale
+    product: "SDS Manager"
     description: "Number of Safety Data Sheets in the SDS Manager database"
     current_value: "17 million+"
-    current_patterns:
-      - "17\\s*(?:M\\b|\\s*million|\\+)"
+    current_patterns: ["17\\s*(?:M\\b|\\s*million|\\+)"]
     stale_patterns:
-      - "\\b1[0-6]\\s*(?:M\\b|million|mill\\b)"        # 10M–16M
-      - "\\b1[0-6][.,]\\d+\\s*(?:M\\b|million)"          # 16.5 million etc.
-    # Only when the number is actually about the SDS database, not e.g.
-    # "16 million tonnes of waste".
-    require_context:
-      - "SDS"
-      - "safety data sheet"
-      - "data sheet"
-      - "database"
-      - "documents?\\b"
-      - "library"
+      - "\\b1[0-6]\\s*(?:M\\b|million|mill\\b)"
+      - "\\b1[0-6][.,]\\d+\\s*(?:M\\b|million)"
+    require_context: ["SDS", "safety data sheet", "data sheet", "database", "documents?\\b", "library"]
     context_window: 120
-    # Also inventory every DB-size claim found site-wide.
     claim_patterns:
       - "(\\d{1,2}(?:[.,]\\d+)?)\\s*(?:M\\b|million|mill\\b)\\s*(?:\\+\\s*)?(?:SDS|safety data sheet|data sheet|document)"
     severity: high
-    applies_to: all
     notes: "Current figure is 17M+. Historic pages may say 12M/14M/15M/16M."
 
-  # ---- Issue 2: Target-market positioning ------------------------------
   - id: positioning
     category: positioning
     type: stale
+    product: "SDS Manager"
     description: "SDS Manager is Enterprise-focused, not small-business focused"
     current_value: "Enterprise Solutions focused"
     stale_patterns:
@@ -68,13 +54,12 @@ facts:
       - "(?:perfect|ideal|suitable|great|designed) for small"
       - "small (?:teams?|companies|firms|enterprises)"
     severity: high
-    applies_to: all
-    notes: "Rewrite to enterprise-focused. LLM pass catches paraphrases regex misses."
+    notes: "Rewrite to enterprise-focused."
 
-  # ---- Issue 3: FREE claims (pricing misrepresentation) ----------------
   - id: free_policy
     category: free_claim
     type: stale
+    product: "SDS Manager"
     description: "No free plan exists — only a free TRIAL, then paid"
     current_value: "Free trial only (no free plan/version/tier)"
     stale_patterns:
@@ -88,53 +73,108 @@ facts:
       - "free to use"
       - "use (?:it |the app |sds ?manager )?for free"
       - "\\bfor free\\b"
-    # "free trial" and trial context are CORRECT — skip hits near these.
-    allowed_patterns:
-      - "free trial"
-      - "\\btrial\\b"
-      - "\\d+[\\s-]day"
-      - "try .{0,30} free"
+    allowed_patterns: ["free trial", "\\btrial\\b", "\\d+[\\s-]day", "try .{0,30} free"]
     context_window: 80
     severity: critical
-    applies_to: all
     notes: "Distinguish 'free trial' (ok) from 'free plan/option/version' (issue)."
 
-  # ---- Issue 4: Language count (inventory until canonical decided) ------
-  - id: languages_supported
+  # ==================================================================
+  # Product: SDS Manager
+  # ==================================================================
+  - id: sdsmanager_inventory_languages
     category: language_count
-    type: inventory
-    description: "Number of supported languages"
-    claim_patterns:
-      - "(\\d{2,3})\\s*(?:\\+\\s*)?languages\\b"
-      - "in\\s*(\\d{2,3})\\s*(?:\\+\\s*)?languages"
-      - "(\\d{2,3})\\s*(?:different\\s*)?languages"
-    canonical_value: "36"          # set by team 2026-07-20; mismatches now flag
+    type: stale
+    product: "SDS Manager"
+    description: >-
+      SDS Manager platform/inventory interface is available in 32 languages. A number other
+      than 32 attached to inventory/platform/interface/UI language claims is wrong.
+    current_value: "32"
+    search_terms: ["languages in inventory", "platform languages", "interface languages",
+                   "40 languages", "36 languages", "29 languages", "available in 32 languages"]
     severity: high
-    applies_to: all
-    notes: "Canonical = 36 languages. Pages claiming 29/35/39/40/48 are flagged."
+    notes: "Context-classified by src/analysis/products.py (inventory context -> 32)."
 
-  # ---- Issue 5: Region / country / market / translation counts ---------
-  - id: region_count
+  - id: sdsmanager_sds_languages
+    category: language_count
+    type: stale
+    product: "SDS Manager"
+    description: >-
+      SDS documents (safety data sheets) are supported in 67 languages. A number other than 67
+      attached to SDS/safety-data-sheet/document language claims is wrong. A bare 'N languages'
+      with no single clear context is UNCLEAR and must be clarified by the team.
+    current_value: "67"
+    search_terms: ["SDS in 67 languages", "safety data sheets languages", "documents in languages",
+                   "40 languages", "50 languages"]
+    severity: high
+    notes: "Context-classified (SDS context -> 67; no/ambiguous context -> unclear)."
+
+  - id: sdsmanager_regulations
+    category: regulation_count
+    type: stale
+    product: "SDS Manager"
+    description: >-
+      SDS Manager supports 49 regulations. Any other count of supported regulations is stale.
+      (Internal admin reference only: admin55.sdsmanager.com — never crawled/link-checked.)
+    current_value: "49"
+    search_terms: ["49 regulations", "supported regulations", "20 regulations", "30 regulations",
+                   "40 regulations", "50 regulations", "number of regulations"]
+    severity: high
+
+  - id: sdsmanager_countries
     category: region_count
     type: inventory
-    description: "Number of regions / countries / markets served"
+    product: "SDS Manager"
+    description: "SDS Manager supports 80 countries. Any other country count is stale/wrong."
     claim_patterns:
-      - "(\\d{1,4})\\s*(?:\\+\\s*)?(?:countries|regions|markets)\\b"
-      - "in\\s*(\\d{1,4})\\s*(?:\\+\\s*)?(?:countries|regions|markets)"
-    canonical_value: "36"
+      - "(\\d{1,4})\\s*(?:\\+\\s*)?countries\\b"
+      - "in\\s*(\\d{1,4})\\s*(?:\\+\\s*)?countries"
+    canonical_value: "80"
+    search_terms: ["80 countries", "50 countries", "100 countries", "190 countries"]
     severity: high
-    applies_to: all
-    notes: "Canonical = 36 regions (same as languages). Company serves worldwide/all
-      nationalities, so treat flagged country-count claims (e.g. 50/80) as prompts
-      to reword, and mark true 'customers in N countries' stats as ignored."
 
-  - id: translation_count
+  - id: sdsmanager_sds_regions
     category: region_count
-    type: inventory
-    description: "Number of translations"
-    claim_patterns:
-      - "(\\d{1,4})\\s*(?:\\+\\s*)?translations\\b"
-    canonical_value: "36"
+    type: stale
+    product: "SDS Manager"
+    description: >-
+      Standard supported SDS regions are exactly these 12: EU, China, Australia, New Zealand,
+      US, UK, Canada, Switzerland, South Africa, Mexico, Malaysia, Vietnam. Flag pages listing
+      a different region set/count, or claiming a region outside this list as standard. Allowed:
+      mentions of market-region classification (an SDS may be classified by its market region).
+    current_value: >-
+      EU, China, Australia, New Zealand, US, UK, Canada, Switzerland, South Africa, Mexico,
+      Malaysia, Vietnam (12 standard regions)
+    stale_patterns: ["\\b(?!12\\b)\\d{1,2}\\s+(?:sds\\s+)?regions\\b"]
+    allowed_patterns: ["market[\\s-]?region", "market region"]
+    require_context: ["region"]
+    search_terms: ["SDS regions", "supported regions", "10 regions", "15 regions"]
     severity: high
-    applies_to: all
-    notes: "Canonical = 36 (tracks the 36 languages). Adjust if translations differ."
+
+  # ==================================================================
+  # Product: ExactSDS (a product of SDS Manager)
+  # ==================================================================
+  - id: exactsds_languages
+    category: language_count
+    type: stale
+    product: "ExactSDS"
+    description: >-
+      ExactSDS supports SDS creation and translation in 32 languages. Any other number in an
+      ExactSDS language claim is wrong.
+    current_value: "32"
+    search_terms: ["ExactSDS languages", "ExactSDS 32 languages", "create SDS in languages",
+                   "ExactSDS translation languages", "40 languages"]
+    severity: high
+    notes: "Context-classified (ExactSDS context -> 32)."
+
+  - id: exactsds_regulations
+    category: regulation_count
+    type: stale
+    product: "ExactSDS"
+    description: >-
+      ExactSDS supports 8 regulations, and the admin Regulation Builder adds new regulations
+      with no code changes. Flag other counts, and any claim that ExactSDS regulations are
+      fixed/hardcoded/cannot be added to.
+    current_value: "8 (extensible via admin Regulation Builder — no code change)"
+    search_terms: ["ExactSDS regulations", "ExactSDS 8 regulations", "regulation builder",
+                   "fixed regulations", "hardcoded regulations", "10 regulations"]
+    severity: high

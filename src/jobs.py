@@ -5,8 +5,9 @@ import asyncio
 
 from starlette.concurrency import run_in_threadpool
 
+from .config import settings
 from .crawler import crawl_source
-from .db import CATEGORIES, now_iso, reconcile_fixed
+from .db import CATEGORIES, now_iso, reconcile_fixed, source_domain
 
 
 def create_job(conn, type_: str, source_id: int) -> int:
@@ -74,21 +75,159 @@ def _latest_hashes(conn, source_id):
            FROM urls u WHERE u.source_id=?""", (source_id,)) if r["h"]}
 
 
-async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
-                       include_external=False) -> None:
-    """One click = check sitemap, crawl pages, then run fact + technical checks.
+def _read_stats(conn, source_id):
+    """READ-stage tallies from the latest crawl result per URL."""
+    primary = source_domain(conn, source_id) or settings()["crawl"]["primary_domain"]
+    read = conn.execute(
+        """SELECT COUNT(*) c FROM urls u JOIN crawl_results c ON c.id=(
+             SELECT id FROM crawl_results WHERE url_id=u.id ORDER BY id DESC LIMIT 1)
+           WHERE u.source_id=? AND c.body_text IS NOT NULL AND c.body_text!=''""",
+        (source_id,)).fetchone()["c"]
+    unreadable = conn.execute(
+        """SELECT COUNT(*) c FROM urls u JOIN crawl_results c ON c.id=(
+             SELECT id FROM crawl_results WHERE url_id=u.id ORDER BY id DESC LIMIT 1)
+           WHERE u.source_id=? AND (c.body_text IS NULL OR c.body_text=''
+                 OR c.error IS NOT NULL OR c.status_code>=400)""",
+        (source_id,)).fetchone()["c"]
+    faqs = conn.execute(
+        "SELECT COUNT(*) c FROM faqs f JOIN urls u ON u.id=f.url_id WHERE u.source_id=?",
+        (source_id,)).fetchone()["c"]
+    return {"pages_read": read, "pages_unreadable": unreadable, "faqs_extracted": faqs}
 
-    include_external (scheduled syncs) also refreshes external/web findings.
+
+def _match_stats(conn, source_id):
+    """MATCH-stage tallies from fact_matches for this source's pages."""
+    row = conn.execute(
+        """SELECT
+             COUNT(*) total,
+             SUM(verdict='positive') pos,
+             SUM(verdict='issue') iss,
+             SUM(verdict='unclear') unc,
+             COUNT(DISTINCT fact_rule_id) facts
+           FROM fact_matches WHERE url_id IN (SELECT id FROM urls WHERE source_id=?)""",
+        (source_id,)).fetchone()
+    enabled = conn.execute("SELECT COUNT(*) c FROM fact_rules WHERE enabled=1").fetchone()["c"]
+    return {"claims_extracted": row["total"] or 0, "matches_positive": row["pos"] or 0,
+            "matches_issue": row["iss"] or 0, "matches_unclear": row["unc"] or 0,
+            "facts_checked": enabled}
+
+
+def _update_read_stats(conn, job_id, source_id):
+    update_job(conn, job_id, **_read_stats(conn, source_id))
+
+
+def _update_match_stats(conn, job_id, source_id):
+    update_job(conn, job_id, **_match_stats(conn, source_id))
+
+
+# maps a running job's `stage` to which of the 3 flow stages is active
+_STAGE_OF = {"sitemap": 1, "pages": 1, "read": 2, "facts": 3, "external": 3, "done": 3}
+
+
+def pipeline_state(conn, source_id: int) -> dict:
+    """The 3-stage flow (CRAWL -> READ -> MATCH) for a source: live if a sync is
+    running, else the last completed run's numbers. Shared by dashboard + live JSON."""
+    primary = source_domain(conn, source_id) or settings()["crawl"]["primary_domain"]
+    total = conn.execute(
+        "SELECT COUNT(*) c FROM urls WHERE source_id=? AND in_source=1 AND url LIKE ?",
+        (source_id, f"%{primary}%")).fetchone()["c"]
+    crawled = conn.execute(
+        "SELECT COUNT(DISTINCT c.url_id) c FROM crawl_results c JOIN urls u ON u.id=c.url_id WHERE u.source_id=?",
+        (source_id,)).fetchone()["c"]
+    errors = conn.execute(
+        """SELECT COUNT(*) c FROM crawl_results c JOIN urls u ON u.id=c.url_id
+           WHERE u.source_id=? AND (c.error IS NOT NULL OR c.status_code>=400)
+             AND c.id=(SELECT id FROM crawl_results WHERE url_id=u.id ORDER BY id DESC LIMIT 1)""",
+        (source_id,)).fetchone()["c"]
+    running = conn.execute(
+        "SELECT * FROM jobs WHERE source_id=? AND type IN ('sync','crawl') AND status IN ('running','queued') ORDER BY id DESC LIMIT 1",
+        (source_id,)).fetchone()
+    last = conn.execute(
+        "SELECT * FROM jobs WHERE source_id=? AND type IN ('sync','crawl') AND status IN ('done','error','canceled') ORDER BY id DESC LIMIT 1",
+        (source_id,)).fetchone()
+    job = running or last
+    active = _STAGE_OF.get(job["stage"], 0) if running and job else 0
+
+    def status_for(idx):
+        if not running:
+            if last and last["status"] == "error":
+                return "failed" if idx >= active else "complete"
+            return "complete" if (last and crawled) else "pending"
+        if idx < active:
+            return "complete"
+        if idx == active:
+            return "running"
+        return "pending"
+
+    rd = _read_stats(conn, source_id)
+    mt = _match_stats(conn, source_id)
+    # live crawl progress from the running job
+    prog = (running["progress"] if running else crawled) or 0
+    tot = (running["total"] if running and running["total"] else total) or 0
+    last_ts = last["finished_at"] if last else None
+    return {
+        "running": bool(running), "job_id": (running["id"] if running else (last["id"] if last else None)),
+        "stage_active": active, "last_finished": last_ts,
+        "error": (job["error"] if job else None),
+        "scope_label": (job["scope_label"] if job and "scope_label" in job.keys() else None),
+        "s1": {"name": "CRAWL", "status": status_for(1), "crawled": prog, "total": tot, "errors": errors},
+        "s2": {"name": "READ", "status": status_for(2), "read": rd["pages_read"],
+               "unreadable": rd["pages_unreadable"], "claims": mt["claims_extracted"],
+               "faqs": rd["faqs_extracted"]},
+        "s3": {"name": "MATCH", "status": status_for(3), "facts": mt["facts_checked"],
+               "positive": mt["matches_positive"], "issues": mt["matches_issue"],
+               "unclear": mt["matches_unclear"]},
+        "message": (job["message"] if job else ""),
+    }
+
+
+_FACT_CATS = ("database_size", "positioning", "free_claim", "language_count", "region_count",
+              "regulation_count", "feature_claim", "faq", "other_mismatch")
+_TECH_CATS = ("status", "crawl", "seo_technical")
+_CANNIB_CATS = ("cannibalization",)
+
+
+def _resolve_locales(conn, source_id, locale_cfg):
+    """Locale include-list for crawl_source from a saved locale scope. None = all."""
+    from .db import ENGLISH_PRESET, locales_for_source
+    mode = (locale_cfg or {}).get("mode", "all")
+    if mode == "all":
+        return None
+    detected = {l["code"] for l in locales_for_source(conn, source_id)}
+    if mode == "english":
+        allow = [c for c in ENGLISH_PRESET if c in detected]
+        allow.append("(root)")  # root/default pages count as English
+        return allow
+    # custom
+    return list((locale_cfg or {}).get("locales") or []) or None
+
+
+async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
+                       include_external=False, scope=None, locale=None) -> None:
+    """One click = check sitemap, crawl pages, then run the SELECTED analyses.
+
+    scope: {fact_check, technical_seo, cannibalization, faq} — skipped analyses run
+    NOTHING (no LLM, no compute, no issues). locale: {mode, locales} filters URLs before
+    crawling. Both default to the project's saved config; include_external adds web findings.
     """
     from .analysis.facts import analyze_facts_regex
     from .analysis.inventory import consistency_check
     from .analysis.technical import analyze_technical
+    from .db import get_run_config, scope_label, set_run_config
     from .ingest import add_and_ingest
+
+    cfg = get_run_config(conn, source_id)
+    scope = scope if scope is not None else cfg["scope"]
+    locale = locale if locale is not None else cfg["locale"]
+    set_run_config(conn, source_id, scope, locale)  # persist as this project's default
+    label = scope_label(scope, locale)
+    locale_allow = _resolve_locales(conn, source_id, locale)
 
     run_start = now_iso()
     src = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
     update_job(conn, job_id, status="running", started_at=run_start, stage="sitemap",
-               progress=0, total=0, message="Checking site map…")
+               progress=0, total=0, message="Checking site map…",
+               scope_label=label, run_scope=__import__("json").dumps(scope))
     before_in = _in_source_ids(conn, source_id)
     before_hashes = _latest_hashes(conn, source_id)
 
@@ -107,20 +246,55 @@ async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
             update_job(conn, job_id, progress=done, total=total, errors=errors,
                        message=f"Checking pages… {done}/{total}")
 
-        await crawl_source(conn, source_id, only_changed=only_changed, on_progress=on_progress)
+        await crawl_source(conn, source_id, only_changed=only_changed, on_progress=on_progress,
+                           locales=locale_allow)
 
         after_hashes = _latest_hashes(conn, source_id)
         changed = sum(1 for uid, h in after_hashes.items()
                       if uid in before_hashes and before_hashes[uid] != h)
         update_job(conn, job_id, urls_changed=changed)
 
-        # Stage 3 — fact rules + inventory + technical (deterministic) + query rules (LLM)
-        update_job(conn, job_id, stage="facts", message="Checking facts…")
-        await run_in_threadpool(analyze_technical, conn, source_id)
-        await run_in_threadpool(analyze_facts_regex, conn, source_id)
-        await run_in_threadpool(consistency_check, conn, source_id)
-        from .factcheck.scan import run_query_rules
-        await run_query_rules(conn, source_id)
+        # Stage 2b — READ: tally extraction results for the pipeline flow
+        update_job(conn, job_id, stage="read", message="Reading pages…")
+        _update_read_stats(conn, job_id, source_id)
+
+        # Stage 3 — MATCH: only the SELECTED analyses run. Skipped ones do nothing.
+        update_job(conn, job_id, stage="facts", message="Matching facts…")
+        reconcile_cats: list[str] = []
+
+        if scope.get("fact_check"):
+            from .db import clear_matches_for_source
+            await run_in_threadpool(clear_matches_for_source, conn, source_id)
+            await run_in_threadpool(analyze_facts_regex, conn, source_id)
+            await run_in_threadpool(consistency_check, conn, source_id)
+            from .analysis.products import analyze_product_claims
+            await run_in_threadpool(analyze_product_claims, conn, source_id)
+            from .factcheck.scan import run_query_rules
+            await run_query_rules(conn, source_id)
+            reconcile_cats += list(_FACT_CATS)
+        else:
+            print("Scope: fact-check SKIPPED (no fact matching this run).")
+
+        if scope.get("faq"):
+            from .analysis.faqs import analyze_faqs
+            await analyze_faqs(conn, source_id)
+        else:
+            print("Scope: FAQ check SKIPPED.")
+
+        if scope.get("technical_seo"):
+            await run_in_threadpool(analyze_technical, conn, source_id)
+            reconcile_cats += list(_TECH_CATS)
+        else:
+            print("Scope: technical/SEO SKIPPED (no SEO/site-health analysis, 0 SEO issues).")
+
+        if scope.get("cannibalization"):
+            from .analysis.cannibalization import analyze_cannibalization
+            await analyze_cannibalization(conn, source_id)
+            reconcile_cats += list(_CANNIB_CATS)
+        else:
+            print("Scope: cannibalization SKIPPED (no TF-IDF/similarity compute).")
+
+        _update_match_stats(conn, job_id, source_id)
 
         # Stage 4 (scheduled runs) — external / web findings
         if include_external:
@@ -131,7 +305,9 @@ async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
                 await run_external_mentions(conn, source_id)
                 await run_external_for_saved_rules(conn, source_id)
 
-        fixed = reconcile_fixed(conn, source_id, CATEGORIES, run_start)
+        # Only reconcile the categories we actually re-scanned — a skipped analysis must
+        # NOT mark its (stale) issues fixed.
+        fixed = reconcile_fixed(conn, source_id, reconcile_cats, run_start) if reconcile_cats else 0
         found = conn.execute(
             "SELECT COUNT(*) c FROM issues WHERE source_id=? AND detected_at>=? AND status='open'",
             (source_id, run_start),
@@ -185,7 +361,7 @@ def needs_sync(conn, source_id: int) -> tuple[bool, str]:
     """Cheap check: never crawled, or a page's sitemap lastmod is newer than its last crawl."""
     from .config import settings
 
-    primary = settings()["crawl"]["primary_domain"]
+    primary = source_domain(conn, source_id) or settings()["crawl"]["primary_domain"]
     total = conn.execute(
         "SELECT COUNT(*) c FROM urls WHERE source_id=? AND in_source=1 AND url LIKE ?",
         (source_id, f"%{primary}%")).fetchone()["c"]

@@ -11,7 +11,7 @@ import re
 
 from ..config import resolve_path, settings
 from ..rules import load_rules
-from ..db import record_issue
+from ..db import record_issue, record_match, rule_pk
 from ..util import context_around, normalize_text
 
 # generic numeric claims for the inventory CSV
@@ -46,9 +46,9 @@ def collect_inventory(conn, source_id):
     rows = _latest_bodies(conn, source_id)
     inv: dict = {}
 
-    def ensure(kind, label, category, canonical):
-        inv.setdefault(kind, {"label": label, "category": category,
-                              "canonical": canonical, "values": {}})
+    def ensure(kind, label, category, canonical, product_id=None):
+        inv.setdefault(kind, {"label": label, "category": category, "canonical": canonical,
+                              "product_id": product_id, "values": {}})
 
     # fact-driven claim inventories (languages, regions, translations, db size)
     fact_patterns = []
@@ -56,7 +56,8 @@ def collect_inventory(conn, source_id):
         pats = f.get("claim_patterns")
         if not pats:
             continue
-        ensure(f["id"], f.get("description", f["id"]), f.get("category"), f.get("canonical_value"))
+        ensure(f["id"], f.get("description", f["id"]), f.get("category"),
+               f.get("canonical_value"), f.get("product_id"))
         fact_patterns.append((f["id"], [re.compile(p, re.I) for p in pats]))
 
     for kind in _GENERIC:
@@ -96,21 +97,29 @@ def consistency_check(conn, source_id: int) -> int:
         if canonical in (None, "", "null"):
             continue  # not decided yet -> inventory only, no flags
         canonical = str(canonical)
+        pk = rule_pk(conn, kind)
+        prod = data.get("product_id")
         for val, occ in values.items():
-            if str(val) == canonical:
-                continue
+            match = str(val) == canonical
             seen = set()
             for url_id, _url, quote in occ:
                 if url_id in seen:
                     continue
                 seen.add(url_id)
+                if match:
+                    record_match(conn, fact_rule_id=pk, url_id=url_id, verdict="positive",
+                                 evidence=quote, matched_value=str(val), product_id=prod)
+                    continue
                 record_issue(
                     conn, source_id=source_id, url_id=url_id,
                     category=data["category"], severity="high",
                     title=f"{kind}:inconsistent",
                     detail=f"{data['label']}: page claims '{val}' but canonical is '{canonical}'.",
                     evidence=quote, expected=canonical, detection_method="inventory",
+                    product_id=prod,
                 )
+                record_match(conn, fact_rule_id=pk, url_id=url_id, verdict="issue",
+                             evidence=quote, matched_value=str(val), product_id=prod)
                 issues += 1
     conn.commit()
     print(f"Consistency check: {issues} mismatch issues (canonical values only).")

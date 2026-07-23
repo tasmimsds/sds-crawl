@@ -8,11 +8,13 @@ from ..rules import load_features as load_features_db
 from ..rules import load_rules
 
 
-def facts_context(conn) -> str:
+def facts_context(conn, product_id: int | None = None) -> str:
     lines = []
-    for f in load_rules(conn):
+    for f in load_rules(conn, product_id=product_id):
         cur = f.get("current_value") or f.get("canonical_value") or "TBD"
-        line = f"- [{f['id']} / {f['category']}] {f.get('description','')}. Correct value: {cur}."
+        prod = f.get("product_name") or "any product"
+        line = (f"- [{f['id']} / {f['category']} / product: {prod}] "
+                f"{f.get('description','')}. Correct value: {cur}.")
         if f.get("allowed_patterns"):
             line += " ALLOWED (not an issue): " + "; ".join(f["allowed_patterns"][:4]) + "."
         lines.append(line)

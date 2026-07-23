@@ -17,14 +17,21 @@
 <h2 class="section-h">Fact rules ({{ rules|length }})</h2>
 <div class="card table-card">
   <table class="tbl">
-    <thead><tr><th>Name</th><th>Type</th><th>Category</th><th>Correct value</th><th>Sev</th><th>On</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Type</th><th>Category</th><th>Correct value</th><th>Scoreboard</th><th>Sev</th><th>On</th><th></th></tr></thead>
     <tbody>
     {% for r in rules %}
       <tr>
-        <td><b>{{ r.name or r.slug }}</b><div class="muted small clamp2">{{ r.description }}</div></td>
+        <td><b>{{ r.name or r.slug }}</b>
+          <span class="pill">{{ r.product_name or 'company-wide' }}</span>
+          <div class="muted small clamp2">{{ r.description }}</div></td>
         <td>{{ r.rule_type }}</td>
         <td class="muted small">{{ r.category|cat_label }}</td>
         <td>{{ r.correct_value or '—' }}</td>
+        <td class="scoreboard">
+          <span class="pos" title="stated correctly">✓ {{ r.pos or 0 }}</span>
+          <span class="danger" title="issues">✗ {{ r.iss or 0 }}</span>
+          <span class="warn" title="unclear">? {{ r.unc or 0 }}</span>
+        </td>
         <td><span class="badge sev-{{ r.severity }}">{{ r.severity }}</span></td>
         <td>
           <form method="post" action="/facts/rule/{{ r.slug }}/toggle" class="inline">

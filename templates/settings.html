@@ -6,16 +6,88 @@
 
 <div class="card">
   <h2 class="section-h" style="margin-top:0">AI models</h2>
-  <table class="tbl kv">
-    <tr><td>Screening model (fast)</td><td><code>{{ info.fast_model }}</code></td></tr>
-    <tr><td>Verification model (reasoning)</td><td><code>{{ info.reasoning_model }}</code></td></tr>
-    <tr><td>Max LLM calls / run</td><td>{{ info.max_calls }}</td></tr>
-    <tr><td>Max output tokens</td><td>{{ info.max_output }}</td></tr>
-    <tr><td>OpenRouter key</td><td>{{ '✓ present' if info.key_present else '✗ not set (add to .env)' }}</td></tr>
-  </table>
-  <p class="muted small">Override per run with <code>--fast-model</code> / <code>--reasoning-model</code> or the
-    <code>SDS_FAST_MODEL</code> / <code>SDS_REASONING_MODEL</code> env vars.</p>
+  <p class="muted small">Pick from a short list of vetted models. Accuracy is the priority; the
+    recommended options are strong at reading pages, reasoning, and clean structured output.</p>
+
+  {% macro tier(title, note, cards, radio) %}
+  <fieldset class="model-tier">
+    <legend>{{ title }}</legend>
+    <p class="muted small" style="margin:0 0 8px">{{ note }}</p>
+    {% for m in cards %}
+    <label class="model-card {{ 'sel' if m.selected }}">
+      <input type="radio" name="{{ radio }}" value="{{ m.id }}" {{ 'checked' if m.selected }}
+             onchange="pickCard(this)" />
+      <span class="mc-body">
+        <span class="mc-head"><b>{{ m.name }}</b>
+          {% if m.recommended %}<span class="badge-rec">★ Recommended</span>{% endif %}</span>
+        <span class="mc-label">{{ m.label }}</span>
+        <span class="muted small">{{ m.desc }}</span>
+        <span class="mc-price">{% if m.price and m.price.prompt_m is defined %}${{ m.price.prompt_m }}/M in · ${{ m.price.completion_m }}/M out{% else %}pricing unavailable{% endif %}</span>
+      </span>
+    </label>
+    {% endfor %}
+  </fieldset>
+  {% endmacro %}
+
+  <form method="post" action="/settings/models" class="stack form-wide">
+    {{ tier('Screening model (fast — high-volume page scanning)',
+            'Scans every page to spot candidate claims.', fast_cards, 'fast_model') }}
+    {{ tier('Verification model (reasoning — final verdicts, fact interpretation, brand scoping)',
+            'Makes the nuanced calls and parses your typed facts.', reasoning_cards, 'reasoning_model') }}
+
+    {% if info.cost %}
+    <p class="muted small">💰 A full check of your site (~{{ info.cost.pages|comma }} pages) costs
+      roughly <b>${{ info.cost.usd }}</b> with the selected models.</p>
+    {% endif %}
+
+    <label class="field"><span>Spend cap per run (USD) — pauses (doesn't silently stop); raise &amp; re-run to resume</span>
+      <input type="number" step="0.5" min="0" name="spend_cap" value="{{ info.spend_cap }}" /></label>
+
+    <details class="advanced" {{ 'open' if info.fast_custom or info.reasoning_custom }}>
+      <summary>Advanced — custom model IDs (power users)</summary>
+      <p class="note err">⚠ Unvetted models may reduce accuracy or break structured output. Leave
+        blank to use the vetted options above. A value here overrides the selection.</p>
+      <label class="field"><span>Custom screening model ID</span>
+        <input type="text" name="fast_custom" value="{{ info.fast_custom }}" placeholder="provider/model-id" /></label>
+      <label class="field"><span>Custom verification model ID</span>
+        <input type="text" name="reasoning_custom" value="{{ info.reasoning_custom }}" placeholder="provider/model-id" /></label>
+    </details>
+
+    <div class="form-actions">
+      <button class="btn btn-primary" type="submit">Save models</button>
+      <button class="btn" type="button" onclick="testModels(this)">Test models</button>
+      <span id="test-result" class="muted small"></span>
+    </div>
+  </form>
+  <p class="muted small" style="margin-top:10px">Fact interpretation uses the verification model.
+    Within each tier, the other listed options are the automatic fallback if the first is rate-limited.
+    OpenRouter key: {{ '✓ present' if info.key_present else '✗ not set (add to .env)' }}.</p>
+  {% if info.env_override %}<p class="note err">⚠ <code>SDS_FAST_MODEL</code>/<code>SDS_REASONING_MODEL</code>
+    env vars are set and override these settings for CLI runs.</p>{% endif %}
 </div>
+
+<script>
+function pickCard(radio){
+  const name=radio.name;
+  document.querySelectorAll(`input[name="${name}"]`).forEach(r=>{
+    r.closest(".model-card").classList.toggle("sel", r.checked);
+  });
+}
+async function testModels(btn){
+  const out=document.getElementById("test-result");
+  btn.disabled=true; if(out) out.textContent="Testing…";
+  try{
+    const j=await (await fetch("/settings/test-models",{method:"POST"})).json();
+    if(j.error){ if(out) out.textContent="✗ "+j.error; }
+    else{
+      const f=j.fast, r=j.reasoning;
+      const line=(t)=>t.ok?`✓ ${t.model}`:`✗ ${t.model}: ${t.error}`;
+      if(out) out.innerHTML=`fast: ${line(f)}<br>reasoning: ${line(r)}`;
+    }
+  }catch(e){ if(out) out.textContent="✗ "+e; }
+  btn.disabled=false;
+}
+</script>
 
 {% if brand %}
 <div class="card">
@@ -38,6 +110,19 @@
 </div>
 {% endif %}
 
+{% if active %}
+<div class="card">
+  <h2 class="section-h" style="margin-top:0">Sitemap discovery</h2>
+  <p class="muted small">Project: <b>{{ active.name }}</b> · {{ active.location }}</p>
+  <p class="muted small">If this project isn't finding pages, re-run auto-discovery against its
+    domain (checks robots.txt, common sitemap paths, then falls back to link-crawling).</p>
+  <div class="form-actions">
+    <button class="btn" type="button" onclick="redetect(this)">Re-detect sitemap</button>
+    <span id="redetect-result" class="muted small"></span>
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
   <h2 class="section-h" style="margin-top:0">Crawl settings</h2>
   <table class="tbl kv">
@@ -45,7 +130,68 @@
     <tr><td>Request timeout</td><td>{{ info.crawl.request_timeout_s }}s</td></tr>
     <tr><td>Politeness delay</td><td>{{ info.crawl.per_worker_delay_s }}s</td></tr>
     <tr><td>User agent</td><td><code>{{ info.crawl.user_agent }}</code></td></tr>
-    <tr><td>Primary domain</td><td>{{ info.crawl.primary_domain }}</td></tr>
+    <tr><td>Default domain</td><td>{{ info.crawl.primary_domain }}</td></tr>
   </table>
 </div>
+
+{% if active %}
+<div class="card danger-zone">
+  <h2 class="section-h" style="margin-top:0">⚠ Danger zone</h2>
+  <p class="muted small">Permanently delete this project and everything belonging to it. This
+    cannot be undone.</p>
+  <button class="btn btn-cancel" type="button"
+          onclick="openDelete({{ active.id }}, '{{ active.name|replace("'", "\\'") }}')">Delete project</button>
+</div>
+
+<div class="modal-backdrop" id="del-modal" hidden onclick="if(event.target===this)closeDelete()">
+  <div class="modal">
+    <h3>Delete project</h3>
+    <div id="del-summary" class="muted small">Loading…</div>
+    <label class="field" style="margin-top:12px"><span>Type the project name to confirm</span>
+      <input type="text" id="del-confirm" autocomplete="off" placeholder="" /></label>
+    <div id="del-error" class="note err" style="display:none"></div>
+    <div class="form-actions">
+      <button class="btn btn-cancel" id="del-go" onclick="doDelete()" disabled>Delete permanently</button>
+      <button class="btn" onclick="closeDelete()">Cancel</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<script>
+async function redetect(btn){
+  const out=document.getElementById("redetect-result");
+  btn.disabled=true; if(out) out.textContent="Discovering…";
+  try{
+    const j=await (await fetch(`/sites/{{ active.id if active else 0 }}/redetect`,{method:"POST"})).json();
+    if(out) out.textContent = j.error ? ("✗ "+j.error) : `✓ Found ${j.urls} URLs. Run a sync to crawl them.`;
+  }catch(e){ if(out) out.textContent="✗ "+e; }
+  btn.disabled=false;
+}
+let _delId=null, _delName="";
+async function openDelete(id, name){
+  _delId=id; _delName=name;
+  document.getElementById("del-modal").hidden=false;
+  document.getElementById("del-error").style.display="none";
+  const c=document.getElementById("del-confirm"); c.value=""; c.placeholder=name;
+  const go=document.getElementById("del-go"); go.disabled=true;
+  c.oninput=()=>{ go.disabled = c.value.trim()!==name; };
+  const s=await (await fetch(`/sites/${id}/delete-info.json`)).json();
+  document.getElementById("del-summary").innerHTML =
+    `This permanently deletes <b>${s.name}</b>: ${s.pages.toLocaleString()} crawled pages, `+
+    `${s.matches.toLocaleString()} fact matches, ${s.findings.toLocaleString()} findings, `+
+    `${s.rules} fact rules, external sources, ${s.jobs} sync history entries, and ${s.schedules} schedules. `+
+    `Fact rules can't be recovered. Company-wide (shared) fact rules are kept.`;
+}
+function closeDelete(){ document.getElementById("del-modal").hidden=true; }
+async function doDelete(){
+  const body=new URLSearchParams({confirm:document.getElementById("del-confirm").value.trim()});
+  const r=await fetch(`/sites/${_delId}/delete`,{method:"POST",body});
+  const j=await r.json();
+  const err=document.getElementById("del-error");
+  if(!r.ok || j.error){ err.style.display="block"; err.textContent=j.error||"Delete failed."; return; }
+  location.href="/";  // active project gone -> back to dashboard (switches or shows empty state)
+}
+window.redetect=redetect; window.openDelete=openDelete; window.closeDelete=closeDelete; window.doDelete=doDelete;
+</script>
 {% endblock %}

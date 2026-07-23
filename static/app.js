@@ -20,37 +20,209 @@ function toggleDetail(row) {
 }
 window.toggleDetail = toggleDetail;
 
-// ---- one-click sync with staged live progress ----
-async function syncSite(sourceId, onlyChanged) {
-  const prog = document.getElementById("prog-" + sourceId);
-  const fill = document.getElementById("fill-" + sourceId);
-  const msg = document.getElementById("msg-" + sourceId);
-  const state = document.getElementById("state-" + sourceId);
-  const cancelBtn = document.getElementById("cancel-" + sourceId);
-  if (prog) prog.style.display = "block";
-  if (msg) msg.textContent = "Starting…";
-  if (state) { state.textContent = "Syncing…"; state.className = "status status-syncing"; }
+// ---- one-click sync: the pipeline flow IS the live progress UI ----
+function _fmt(n) { return (n == null ? 0 : n).toLocaleString(); }
 
-  const body = new URLSearchParams({ only_changed: onlyChanged ? "true" : "false" });
-  const res = await fetch(`/sites/${sourceId}/sync`, { method: "POST", body });
-  if (res.status === 409) { const j = await res.json(); alert(j.error); return; }
-  const { job_id } = await res.json();
-  if (cancelBtn) { cancelBtn.style.display = ""; cancelBtn.setAttribute("onclick", `cancelSync(${job_id}, ${sourceId})`); }
-
-  const poll = async () => {
-    const j = await (await fetch(`/jobs/${job_id}.json`)).json();
-    if (fill) fill.style.width = (j.pct || 0) + "%";
-    if (msg) msg.textContent = j.message || j.status;
-    if (j.status === "running" || j.status === "queued") {
-      setTimeout(poll, 2000);
-    } else {
-      if (msg) msg.textContent = j.error ? "Error: " + j.error : (j.message || "Done");
-      setTimeout(() => location.reload(), 1200);
-    }
+function applyPipeline(sid, p) {
+  const root = document.getElementById("pipe-" + sid);
+  if (!root) return;
+  root.dataset.jobid = p.job_id || "";
+  const stage = (idx, st) => {
+    const el = root.querySelector(`.pstage[data-stage="${idx}"]`);
+    if (el) el.className = "pstage st-" + st;
+    const ar = root.querySelector(`.parrow[data-arrow="${idx}"]`);
+    if (ar) ar.className = "parrow st-" + st;
   };
-  poll();
+  stage(1, p.s1.status); stage(2, p.s2.status); stage(3, p.s3.status);
+  const set = (k, v) => { const e = root.querySelector(`[data-k="${k}"]`); if (e) e.textContent = v; };
+  set("s1main", `${_fmt(p.s1.crawled)} / ${_fmt(p.s1.total)} URLs`);
+  set("s1err", `${p.s1.errors} errors`);
+  set("s2main", `${_fmt(p.s2.read)} pages read`);
+  set("s2unread", `${p.s2.unreadable} unreadable`);
+  set("s2claims", `${_fmt(p.s2.claims)} claims`);
+  set("s3main", `${p.s3.facts} facts checked`);
+  set("s3pos", `✓ ${_fmt(p.s3.positive)} positive`);
+  set("s3iss", `✗ ${_fmt(p.s3.issues)} issues`);
+  set("s3unc", `? ${_fmt(p.s3.unclear)} unclear`);
+  const fill = root.querySelector('[data-k="s1fill"]');
+  if (fill && p.s1.total) fill.style.width = Math.min(100, Math.round(100 * p.s1.crawled / p.s1.total)) + "%";
+}
+
+async function pollPipeline(sid) {
+  let p;
+  try { p = await (await fetch(`/sites/${sid}/pipeline.json`)).json(); }
+  catch (e) { setTimeout(() => pollPipeline(sid), 2500); return; }
+  applyPipeline(sid, p);
+  if (p.running) { setTimeout(() => pollPipeline(sid), 2000); }
+  else { setTimeout(() => location.reload(), 1200); }
+}
+
+// clicking Sync opens the run-options step (scope + locale + cost) first
+function syncSite(sourceId, onlyChanged) { openRunOptions(sourceId, !!onlyChanged); }
+
+let _runCtx = null;
+async function openRunOptions(sid, onlyChanged) {
+  const modal = document.getElementById("run-modal");
+  const bodyEl = document.getElementById("run-modal-body");
+  if (!modal) { return startRunNow(sid, onlyChanged, new URLSearchParams({ only_changed: onlyChanged })); }
+  document.getElementById("run-modal-title").textContent = onlyChanged ? "Sync changes — options" : "Start a check — options";
+  bodyEl.innerHTML = '<p class="muted small">Loading options…</p>';
+  modal.hidden = false;
+  let info;
+  try { info = await (await fetch(`/sites/${sid}/scope-info.json`)).json(); }
+  catch (e) { bodyEl.innerHTML = '<p class="note err">Could not load options.</p>'; return; }
+  _runCtx = { sid, onlyChanged, info };
+  bodyEl.innerHTML = buildRunForm(info);
+  bodyEl.querySelectorAll("input").forEach((el) => el.addEventListener("change", recalcScope));
+  recalcScope();
+}
+function closeRun() { const m = document.getElementById("run-modal"); if (m) m.hidden = true; }
+window.closeRun = closeRun;
+
+function _scopeMode(s) {
+  if (s.fact_check && !s.technical_seo && !s.cannibalization) return "fact";
+  if (s.fact_check && s.technical_seo && s.cannibalization) return "full";
+  return "custom";
+}
+function buildRunForm(info) {
+  const s = info.saved.scope, loc = info.saved.locale, mode = _scopeMode(s);
+  const chk = (b) => (b ? "checked" : "");
+  let h = `
+  <div class="run-sec">
+    <div class="run-h">What should this check?</div>
+    <label class="opt ${mode === 'fact' ? 'sel' : ''}"><input type="radio" name="mode" value="fact" ${chk(mode === 'fact')}>
+      <span><b>⭐ Fact Check only</b> <span class="tag-rec">recommended · cheaper</span><br>
+      <span class="muted small">Crawl + read + fact matching (incl. FAQ). Skips all SEO / site-health / cannibalization.</span></span></label>
+    <label class="opt ${mode === 'full' ? 'sel' : ''}"><input type="radio" name="mode" value="full" ${chk(mode === 'full')}>
+      <span><b>Full check</b><br><span class="muted small">Everything: fact checking + technical SEO + cannibalization + FAQ.</span></span></label>
+    <details class="advanced" ${mode === 'custom' ? 'open' : ''}><summary>Customize</summary>
+      <label class="chk"><input type="checkbox" name="fact_check" ${chk(s.fact_check)}> Fact Check</label>
+      <label class="chk"><input type="checkbox" name="faq" ${chk(s.faq)}> FAQ extraction + check <span class="muted small">(part of fact checking)</span></label>
+      <label class="chk"><input type="checkbox" name="technical_seo" ${chk(s.technical_seo)}> Technical SEO</label>
+      <label class="chk"><input type="checkbox" name="cannibalization" ${chk(s.cannibalization)}> Cannibalization</label>
+      <input type="radio" name="mode" value="custom" ${chk(mode === 'custom')} hidden>
+    </details>
+  </div>`;
+  if (info.has_locale) {
+    const lm = loc.mode || "all";
+    h += `<div class="run-sec">
+      <div class="run-h">Which parts of the site?</div>
+      <label class="opt ${lm === 'all' ? 'sel' : ''}"><input type="radio" name="locale_mode" value="all" ${chk(lm === 'all')}>
+        <span><b>All locales</b> <span class="muted small">(${info.total.toLocaleString()} URLs)</span></span></label>
+      <label class="opt ${lm === 'english' ? 'sel' : ''}"><input type="radio" name="locale_mode" value="english" ${chk(lm === 'english')}>
+        <span><b>⭐ English only</b> <span class="muted small">${info.english.map((c) => '/' + c).join(', ') || '(none detected)'} + root</span></span></label>
+      <label class="opt ${lm === 'custom' ? 'sel' : ''}"><input type="radio" name="locale_mode" value="custom" ${chk(lm === 'custom')}>
+        <span><b>Custom</b></span></label>
+      <div class="locale-grid" id="locale-grid">
+        <div class="lg-actions"><button type="button" class="btn btn-sm" onclick="localeAll(1)">Select all</button>
+          <button type="button" class="btn btn-sm" onclick="localeAll(0)">Clear</button></div>`;
+    const sel = new Set(loc.locales || []);
+    const preselect = lm !== "custom"; // when not custom, boxes mirror the preset for preview only
+    info.locales.forEach((l) => {
+      const on = lm === "custom" ? sel.has(l.code) : (lm === "all" || (lm === "english" && (info.english.includes(l.code) || l.code === "(root)")));
+      h += `<label class="chk"><input type="checkbox" name="locales" value="${l.code}" ${on ? "checked" : ""}> ${l.code} <span class="muted small">${l.count.toLocaleString()} URLs</span></label>`;
+    });
+    h += `</div></div>`;
+  }
+  h += `<div class="run-preview" id="run-preview"></div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="doStartRun()">Start check</button>
+      <button class="btn" onclick="closeRun()">Cancel</button>
+    </div>`;
+  return h;
+}
+
+function localeAll(on) {
+  document.querySelectorAll('#locale-grid input[name="locales"]').forEach((c) => { c.checked = !!on; });
+  const cu = document.querySelector('input[name="locale_mode"][value="custom"]');
+  if (cu) cu.checked = true;
+  recalcScope();
+}
+window.localeAll = localeAll;
+
+function _selectedLocaleMode() {
+  const r = document.querySelector('input[name="locale_mode"]:checked');
+  return r ? r.value : "all";
+}
+function recalcScope() {
+  const ctx = _runCtx; if (!ctx) return;
+  const info = ctx.info;
+  // keep .sel highlight + custom radio in sync
+  document.querySelectorAll("#run-modal .opt").forEach((o) => {
+    const i = o.querySelector("input"); o.classList.toggle("sel", i && i.checked);
+  });
+  const modeR = document.querySelector('input[name="mode"]:checked');
+  let mode = modeR ? modeR.value : "fact";
+  // if a Customize checkbox is toggled, switch to custom
+  const preview = document.getElementById("run-preview"); if (!preview) return;
+  const full = mode === "full";
+  let selUrls, llmPages;
+  if (!info.has_locale) { selUrls = info.total; llmPages = info.english_llm_total || info.total; }
+  else {
+    const lm = _selectedLocaleMode();
+    if (lm === "all") { selUrls = info.total; llmPages = info.english_llm_total; }
+    else if (lm === "english") {
+      selUrls = info.locales.filter((l) => info.english.includes(l.code) || l.code === "(root)")
+        .reduce((a, l) => a + l.count, 0);
+      llmPages = selUrls;
+    } else {
+      const checked = new Set([...document.querySelectorAll('#locale-grid input:checked')].map((c) => c.value));
+      selUrls = info.locales.filter((l) => checked.has(l.code)).reduce((a, l) => a + l.count, 0);
+      llmPages = info.locales.filter((l) => checked.has(l.code) && (info.english.includes(l.code) || l.code === "(root)")).reduce((a, l) => a + l.count, 0);
+    }
+  }
+  const rate = full ? info.rate.full : info.rate.fact;
+  const usd = (llmPages * rate);
+  const mins = Math.max(1, Math.round(selUrls * info.sec_per_page / info.concurrency / 60));
+  preview.innerHTML = `<b>Selected scope:</b> ${selUrls.toLocaleString()} of ${info.total.toLocaleString()} URLs`
+    + ` · <b>Estimated:</b> ~${selUrls.toLocaleString()} pages, ~$${usd.toFixed(2)}, ~${mins} min`
+    + ` <span class="muted small">(estimate)</span>`;
+}
+window.recalcScope = recalcScope;
+
+async function doStartRun() {
+  const ctx = _runCtx; if (!ctx) return;
+  const body = new URLSearchParams();
+  body.set("only_changed", ctx.onlyChanged ? "true" : "false");
+  // mode: full/fact, else custom if a Customize box diverges
+  let mode = (document.querySelector('input[name="mode"]:checked') || {}).value || "fact";
+  const cbs = ["fact_check", "faq", "technical_seo", "cannibalization"];
+  const anyCustomTouched = cbs.some((k) => document.querySelector(`input[name="${k}"]`));
+  // if the user opened Customize and it doesn't match a preset, send custom + toggles
+  body.set("mode", mode);
+  cbs.forEach((k) => { const el = document.querySelector(`input[name="${k}"]`); if (el && el.checked) body.set(k, "1"); });
+  if (mode === "custom" || (anyCustomTouched && mode !== "full" && mode !== "fact")) body.set("mode", "custom");
+  const lm = document.querySelector('input[name="locale_mode"]:checked');
+  body.set("locale_mode", lm ? lm.value : "all");
+  if (lm && lm.value === "custom") {
+    document.querySelectorAll('#locale-grid input[name="locales"]:checked').forEach((c) => body.append("locales", c.value));
+  }
+  await startRunNow(ctx.sid, ctx.onlyChanged, body);
+  closeRun();
+}
+window.doStartRun = doStartRun;
+
+async function startRunNow(sid, onlyChanged, body) {
+  const state = document.getElementById("state-" + sid);
+  if (state) { state.textContent = "Syncing…"; state.className = "status status-syncing"; }
+  const res = await fetch(`/sites/${sid}/sync`, { method: "POST", body });
+  if (res.status === 409) { const j = await res.json(); alertBanner(j.error || "A run is already in progress."); return; }
+  const { job_id } = await res.json();
+  const cancelBtn = document.getElementById("cancel-" + sid);
+  if (cancelBtn) { cancelBtn.style.display = ""; cancelBtn.setAttribute("onclick", `cancelSync(${job_id}, ${sid})`); }
+  pollPipeline(sid);
 }
 window.syncSite = syncSite;
+window.openRunOptions = openRunOptions;
+window.applyPipeline = applyPipeline;
+window.pollPipeline = pollPipeline;
+
+// resume live polling for any pipeline already running on page load
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll(".pipeline").forEach((pl) => {
+    if (pl.querySelector(".pstage.st-running")) pollPipeline(pl.dataset.source);
+  });
+});
 
 // ---- editable search-term chips ----
 function initChips() {
@@ -88,6 +260,14 @@ function filterVerdict(btn, v) {
   });
 }
 window.filterVerdict = filterVerdict;
+
+function filterVerdictBtn(v) {
+  const btn = document.querySelector(`.vf[onclick*="'${v}'"]`);
+  if (btn) btn.click();
+}
+function filterVerdictAll() { filterVerdictBtn("all"); }
+window.filterVerdictBtn = filterVerdictBtn;
+window.filterVerdictAll = filterVerdictAll;
 
 async function markIssue(id, status, btn) {
   const body = new URLSearchParams({ status });
@@ -228,7 +408,6 @@ window.runExternal = runExternal;
 async function cancelSync(jobId, sourceId) {
   if (!jobId) return;
   await fetch(`/jobs/${jobId}/cancel`, { method: "POST" });
-  const msg = document.getElementById("msg-" + sourceId);
-  if (msg) msg.textContent = "Cancelling…";
+  alertBanner("Cancelling…");
 }
 window.cancelSync = cancelSync;

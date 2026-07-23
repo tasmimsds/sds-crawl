@@ -43,6 +43,21 @@ def host_of(url: str) -> str | None:
     return host[4:] if host.startswith("www.") else host
 
 
+def host_excluded(url: str, exclude_hosts) -> bool:
+    """True if the URL's host is in exclude_hosts (exact or a subdomain of one).
+    Used to keep internal panels like admin55.sdsmanager.com out of all crawling."""
+    if not exclude_hosts:
+        return False
+    host = (host_of(url) or "").lower()
+    if not host:
+        return False
+    for e in exclude_hosts:
+        e = (e or "").lower().lstrip(".")
+        if host == e or host.endswith("." + e):
+            return True
+    return False
+
+
 def registrable_domain(url: str) -> str | None:
     """Best-effort eTLD+1 for grouping (handles sdsmanager.com / .no / .es)."""
     host = host_of(url)

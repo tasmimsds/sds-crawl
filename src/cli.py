@@ -48,16 +48,18 @@ def migrate_cmd(no_backup: bool = typer.Option(False, "--no-backup")):
 
 @app.command("models")
 def models_show():
-    """Show the effective LLM models (after env/flag overrides)."""
+    """Show the effective LLM models (DB config, after env/flag overrides)."""
     import os
-    from .config import settings as _s
+    from .db import connect, get_model_config
 
-    s = _s()["llm"]
-    fast = os.getenv("SDS_FAST_MODEL") or s["fast_model"]
-    reasoning = os.getenv("SDS_REASONING_MODEL") or s["reasoning_model"]
-    typer.echo(f"fast_model      : {fast}")
-    typer.echo(f"reasoning_model : {reasoning}")
-    typer.echo("Override with: --fast-model / --reasoning-model / --model  (or SDS_FAST_MODEL / SDS_REASONING_MODEL)")
+    mc = get_model_config(connect())
+    fast = os.getenv("SDS_FAST_MODEL") or mc["fast_model"]
+    reasoning = os.getenv("SDS_REASONING_MODEL") or mc["reasoning_model"]
+    typer.echo(f"fast_model       : {fast}")
+    typer.echo(f"reasoning_model  : {reasoning}")
+    typer.echo(f"interpret_model  : {os.getenv('SDS_REASONING_MODEL') or mc['interpret_model']}")
+    typer.echo(f"spend_cap_usd    : {mc['spend_cap_usd']}")
+    typer.echo("Override per-run: --fast-model / --reasoning-model (or SDS_FAST_MODEL / SDS_REASONING_MODEL)")
 
 
 def _source_or_exit(conn, ref: str):
@@ -219,6 +221,8 @@ def run_all(
     analyze_technical(conn, sid)
     analyze_facts_regex(conn, sid)
     consistency_check(conn, sid)
+    from .analysis.products import analyze_product_claims
+    analyze_product_claims(conn, sid)
     export_claims(conn, sid)
     if not no_llm:
         asyncio.run(fact_check_llm(conn, sid, all_locales=all_locales))

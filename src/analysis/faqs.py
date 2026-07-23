@@ -9,21 +9,23 @@ from ._common import facts_context, features_context, gather_limited
 from .llm import LlmClient
 
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-_SYS = (
-    "You audit FAQ answers on SDS Manager pages. FAQs power Google/AI rich answers, so "
-    "accuracy is critical. Flag any answer that contradicts the source-of-truth facts or "
-    "feature list: wrong DB size (truth 17M+), claims of a FREE PLAN (free trial is fine), "
-    "small-business positioning, wrong language/region counts, or inaccurate feature claims. "
-    "Respond ONLY with JSON."
-)
+def _sys(brand):
+    return (
+        f"You audit FAQ answers on {brand} pages. FAQs power Google/AI rich answers, so "
+        "accuracy is critical. Flag any answer that contradicts the source-of-truth facts or "
+        "feature list: wrong DB size, claims of a FREE PLAN (free trial is fine), "
+        "small-business positioning, wrong language/region/regulation counts, or inaccurate "
+        "feature claims. Respond ONLY with JSON."
+    )
 
 
 def _min_medium(sev: str) -> str:
     return sev if _SEV_RANK.get(sev, 3) <= _SEV_RANK["medium"] else "medium"
 
 
-def _grouped_faqs(conn, source_id: int, all_locales: bool):
+def _grouped_faqs(conn, source_id: int, all_locales: bool, brand: str = "SDS Manager"):
     english = set(settings()["llm"]["english_locales"])
+    brand_l = brand.lower()
     rows = conn.execute(
         """SELECT f.id, f.url_id, u.url, u.locale, f.question, f.answer, f.source
            FROM faqs f JOIN urls u ON u.id=f.url_id
@@ -34,8 +36,8 @@ def _grouped_faqs(conn, source_id: int, all_locales: bool):
     for r in rows:
         if not all_locales and not (r["locale"] is None or r["locale"] in english):
             continue
-        if "sds manager" not in (r["answer"] or "").lower() and \
-           "sds manager" not in (r["question"] or "").lower():
+        if brand_l not in (r["answer"] or "").lower() and \
+           brand_l not in (r["question"] or "").lower():
             continue
         g = groups.setdefault(r["url_id"], {"url": r["url"], "faqs": []})
         g["faqs"].append({"question": r["question"], "answer": r["answer"]})
@@ -47,8 +49,10 @@ async def analyze_faqs(conn, source_id: int, *, all_locales: bool = False):
     if not llm.enabled:
         print("LLM FAQ analysis skipped: no OPENROUTER_API_KEY.")
         return 0
+    from ..db import brand_for_source
+    brand = brand_for_source(conn, source_id)
     facts_c, features_c = facts_context(conn), features_context(conn)
-    groups = _grouped_faqs(conn, source_id, all_locales)
+    groups = _grouped_faqs(conn, source_id, all_locales, brand)
     stats = {"issues": 0}
 
     import json
@@ -61,12 +65,12 @@ async def analyze_faqs(conn, source_id: int, *, all_locales: bool = False):
                 f"FACTS:\n{facts_c}\n\nFEATURES:\n{features_c}\n\nFAQs (JSON):\n{block}\n\n"
                 'Flag problematic answers. Return JSON {"items":[{"question":"...",'
                 '"quote":"<exact wrong text from the answer>","underlying_category":'
-                '"database_size|free_claim|positioning|language_count|region_count|feature_claim|other_mismatch",'
+                '"database_size|free_claim|positioning|language_count|region_count|regulation_count|feature_claim|other_mismatch",'
                 '"severity":"critical|high|medium|low","explanation":"...","expected":"<correct value or null>"}]}. '
                 "Empty array if all answers are fine."
             )
             data = await llm.call_json(task="faq", model=llm.reasoning_model,
-                                       cache_key=key, system=_SYS, user=user)
+                                       cache_key=key, system=_sys(brand), user=user)
             answers_text = " ".join(f["answer"] or "" for f in g["faqs"])
             for item in (data or {}).get("items", []):
                 if not item.get("quote"):

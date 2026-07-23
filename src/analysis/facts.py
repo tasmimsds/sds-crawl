@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 from ..config import settings
-from ..db import record_issue
+from ..db import record_issue, record_match
 from ..rules import load_rules
 from ..util import context_around
 
@@ -49,6 +49,7 @@ def analyze_facts_regex(conn, source_id: int) -> int:
         compiled.append({
             "fact": f,
             "stale": [re.compile(p, re.I) for p in f.get("stale_patterns", [])],
+            "current": [re.compile(p, re.I) for p in f.get("current_patterns", [])],
             "require": [re.compile(p, re.I) for p in f.get("require_context", [])],
             "allowed": [re.compile(p, re.I) for p in f.get("allowed_patterns", [])],
             "window": f.get("context_window", 120),
@@ -70,6 +71,7 @@ def analyze_facts_regex(conn, source_id: int) -> int:
                 if hit:
                     break
             if hit:
+                ev = context_around(body, hit.start(), hit.end() - hit.start())
                 record_issue(
                     conn,
                     source_id=source_id,
@@ -78,11 +80,28 @@ def analyze_facts_regex(conn, source_id: int) -> int:
                     severity=f["severity"],
                     title=f"{f['id']}:stale",
                     detail=f["description"],
-                    evidence=context_around(body, hit.start(), hit.end() - hit.start()),
+                    evidence=ev,
                     expected=f.get("current_value"),
                     detection_method="regex",
+                    product_id=f.get("product_id"),
                 )
+                record_match(conn, fact_rule_id=f["pk"], url_id=page["url_id"], verdict="issue",
+                             evidence=ev, matched_value=hit.group(0), product_id=f.get("product_id"))
                 issues += 1
+                continue
+            # no stale hit -> if the CORRECT value is stated in context, it's a positive
+            pos = None
+            for rx in c["current"]:
+                for m in rx.finditer(body):
+                    if _passes_context(body, m, c["require"], c["allowed"], c["window"]):
+                        pos = m
+                        break
+                if pos:
+                    break
+            if pos:
+                record_match(conn, fact_rule_id=f["pk"], url_id=page["url_id"], verdict="positive",
+                             evidence=context_around(body, pos.start(), pos.end() - pos.start()),
+                             matched_value=pos.group(0), product_id=f.get("product_id"))
     conn.commit()
     print(f"Facts (regex) analysis: {issues} issues across {len(rows)} pages.")
     return issues

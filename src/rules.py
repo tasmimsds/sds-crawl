@@ -13,16 +13,29 @@ def _j(v):
         return []
 
 
-def load_rules(conn, enabled_only: bool = True) -> list[dict]:
-    q = "SELECT * FROM fact_rules"
+def load_rules(conn, enabled_only: bool = True, product_id: int | None = None) -> list[dict]:
+    """Load fact rules for the project. When `product_id` is given, return only that
+    product's rules plus company-wide rules (product_id IS NULL); when None, every rule.
+    A scan of the project checks ALL products' rules — product_id is for the UI filter."""
+    q = ("SELECT fr.*, p.name AS product_name FROM fact_rules fr "
+         "LEFT JOIN products p ON p.id = fr.product_id")
+    conds, params = [], []
     if enabled_only:
-        q += " WHERE enabled=1"
-    q += " ORDER BY category, slug"
+        conds.append("fr.enabled=1")
+    if product_id is not None:
+        conds.append("(fr.product_id IS NULL OR fr.product_id=?)")
+        params.append(product_id)
+    if conds:
+        q += " WHERE " + " AND ".join(conds)
+    q += " ORDER BY fr.category, fr.slug"
     out = []
-    for r in conn.execute(q):
+    for r in conn.execute(q, params):
         rt = r["rule_type"] or "stale"
         out.append({
             "id": r["slug"],
+            "pk": r["id"],
+            "product_id": r["product_id"],
+            "product_name": r["product_name"],
             "category": r["category"],
             "type": rt,
             "description": r["description"] or r["slug"],

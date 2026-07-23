@@ -15,6 +15,10 @@ crawl:
   # Only these domains are ever fetched (sources on other domains are recorded
   # but not crawled unless explicitly added).
   primary_domain: "sdsmanager.com"
+  # Hosts to NEVER crawl or link-check, even though they're on the primary domain
+  # (e.g. internal admin panels). Matched exactly or as a parent suffix.
+  exclude_hosts:
+    - "admin55.sdsmanager.com"
 
 thresholds:
   thin_content_words: 150
@@ -22,15 +26,10 @@ thresholds:
 
 llm:
   base_url: "https://openrouter.ai/api/v1"
-  # Model tiers (override per-run with --fast-model / --reasoning-model, or the
-  # SDS_FAST_MODEL / SDS_REASONING_MODEL env vars).
-  # FREE models — cost $0, so they run even when the key's $ limit is exhausted.
-  # Trade-off: ~1000 requests/day free cap, ~20/min, slightly weaker verify.
-  # For a faster/cleaner paid run (needs key limit raised), switch to:
-  #   fast_model: "google/gemini-2.5-flash-lite"   reasoning_model: "openai/gpt-5-mini"
-  fast_model: "google/gemma-4-26b-a4b-it:free"          # bulk screening
-  reasoning_model: "nvidia/nemotron-3-super-120b-a12b:free"  # verification / judgment
-  max_calls_per_run: 4000                       # hard cost guard (per analysis pass)
+  # NOTE: model names are NOT configured here. The single source of truth is the DB
+  # (app_settings, edited in Settings). Defaults live in src/config.py (premium only).
+  # Per-run CLI override: --fast-model / --reasoning-model (SDS_FAST_MODEL / SDS_REASONING_MODEL).
+  max_calls_per_run: 4000                       # hard call guard (per analysis pass)
   max_output_tokens: 2000                       # cap completion tokens (cost guard;
                                                 # also avoids 402 "can't afford 65536 tokens")
   max_body_chars: 16000                         # truncate page body for screening

@@ -9,7 +9,7 @@ from ..analysis.llm import LlmClient
 from ..util import sha256
 
 _CATS = ["database_size", "positioning", "free_claim", "language_count",
-         "region_count", "feature_claim", "other_mismatch"]
+         "region_count", "regulation_count", "feature_claim", "other_mismatch"]
 
 _SYS = (
     "You convert a user's plain-language statement of a FACT about their own website "
@@ -43,20 +43,37 @@ def _norm_list(v):
     return [str(x).strip() for x in v if str(x).strip()] if isinstance(v, list) else []
 
 
-async def interpret(conn, text: str) -> dict:
+def _assign_product(conn, project_id, text, fact):
+    """Deterministically tag a fact with a product from the project's product list.
+    A product NAME in the text NEVER creates a project — projects come only from the
+    Add Website flow. Falls back to the project's default product."""
+    from ..db import default_product_id, match_product
+    if not project_id:
+        return
+    hay = " ".join(str(fact.get(k) or "") for k in ("fact_name", "claim_topic", "notes")) + " " + text
+    pid = match_product(conn, project_id, hay)
+    if pid is None:
+        pid = default_product_id(conn, project_id)
+    fact["product_id"] = pid
+    row = conn.execute("SELECT name FROM products WHERE id=?", (pid,)).fetchone() if pid else None
+    fact["product_name"] = row["name"] if row else None
+
+
+async def interpret(conn, text: str, project_id: int | None = None) -> dict:
     text = (text or "").strip()
     if not text:
         return {"facts": [], "vague": True}
     llm = LlmClient(conn)
     if not llm.enabled:
         # no LLM -> treat whole text as a plain search
-        return {"facts": [{"fact_name": text[:60], "claim_topic": text[:120],
-                           "correct_value": None, "category": "other_mismatch",
-                           "search_terms": [text], "stale_indicators": [],
-                           "allowed_mentions": [], "notes": "LLM unavailable — plain search."}],
-                "vague": True}
+        f = {"fact_name": text[:60], "claim_topic": text[:120],
+             "correct_value": None, "category": "other_mismatch",
+             "search_terms": [text], "stale_indicators": [],
+             "allowed_mentions": [], "notes": "LLM unavailable — plain search."}
+        _assign_product(conn, project_id, text, f)
+        return {"facts": [f], "vague": True}
 
-    data = await llm.call_json(task="interpret", model=llm.fast_model,
+    data = await llm.call_json(task="interpret", model=llm.interpret_model,
                                cache_key=sha256(text) + "|interp", system=_SYS, user=_user(text))
     # the model may return {"facts":[...]}, a bare [...], or a single {...}
     if isinstance(data, list):
@@ -87,5 +104,7 @@ async def interpret(conn, text: str) -> dict:
         facts = [{"fact_name": text[:60], "claim_topic": text[:120], "correct_value": None,
                   "category": "other_mismatch", "search_terms": [text], "stale_indicators": [],
                   "allowed_mentions": [], "notes": "Could not extract a value — plain search."}]
+    for f in facts:
+        _assign_product(conn, project_id, text, f)
     vague = all(f["correct_value"] is None for f in facts)
     return {"facts": facts, "vague": vague}

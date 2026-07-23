@@ -1,7 +1,7 @@
 """Run saved query-type fact rules during a sync: FTS retrieve -> verdict -> issues."""
 from __future__ import annotations
 
-from ..db import record_issue
+from ..db import record_issue, record_match
 from ..rules import load_rules
 from .query import _MARK, search, verdict
 
@@ -9,7 +9,8 @@ from .query import _MARK, search, verdict
 async def run_query_rules(conn, source_id: int) -> int:
     """Execute enabled query-type rules against the latest crawl; record mismatches."""
     # load_rules() exposes the correct value as "current_value"
-    rules = [r for r in load_rules(conn) if r["type"] == "query" and r.get("current_value")]
+    rules = [r for r in load_rules(conn)
+             if r["type"] == "query" and r.get("current_value")]
     made = 0
     for r in rules:
         correct = r["current_value"]
@@ -19,16 +20,28 @@ async def run_query_rules(conn, source_id: int) -> int:
             continue
         await verdict(conn, result["rows"], correct)
         for row in result["rows"]:
-            if row.get("verdict") != "mismatch" or not row.get("url_id"):
+            v = row.get("verdict")
+            uid = row.get("url_id")
+            if not uid:
                 continue
-            record_issue(
-                conn, source_id=source_id, url_id=row["url_id"],
-                category=r["category"] or "other_mismatch", severity=r["severity"],
-                title=f"rule:{r['id']}",
-                detail=row.get("verdict_reason") or f"Contradicts expected value: {correct}",
-                evidence=_MARK.sub("", row["snippet"]), expected=correct,
-                detection_method="llm",
-            )
-            made += 1
+            ev = _MARK.sub("", row["snippet"])
+            if v == "mismatch":
+                record_issue(
+                    conn, source_id=source_id, url_id=uid,
+                    category=r["category"] or "other_mismatch", severity=r["severity"],
+                    title=f"rule:{r['id']}",
+                    detail=row.get("verdict_reason") or f"Contradicts expected value: {correct}",
+                    evidence=ev, expected=correct,
+                    detection_method="llm", product_id=r.get("product_id"),
+                )
+                record_match(conn, fact_rule_id=r.get("pk"), url_id=uid, verdict="issue",
+                             evidence=ev, matched_value=correct, product_id=r.get("product_id"))
+                made += 1
+            elif v == "matches":
+                record_match(conn, fact_rule_id=r.get("pk"), url_id=uid, verdict="positive",
+                             evidence=ev, matched_value=correct, product_id=r.get("product_id"))
+            elif v == "unclear":
+                record_match(conn, fact_rule_id=r.get("pk"), url_id=uid, verdict="unclear",
+                             evidence=ev, product_id=r.get("product_id"))
     conn.commit()
     return made

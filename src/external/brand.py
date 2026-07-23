@@ -39,7 +39,15 @@ def get_brand(conn, source_id: int) -> dict:
     r = conn.execute("SELECT * FROM brand_profiles WHERE source_id=?", (source_id,)).fetchone()
     if not r:
         return {}
-    return {"source_id": source_id, "brand_name": r["brand_name"], "aliases": _j(r["aliases"]),
+    from ..db import product_brand_aliases
+    # product names + their aliases are ALSO brand aliases: a page about any of our
+    # products (e.g. "ExactSDS") is talking about our brand and must be scoped in.
+    aliases = list(_j(r["aliases"]))
+    seen = {a.lower() for a in aliases}
+    for a in product_brand_aliases(conn, source_id):
+        if a.lower() not in seen:
+            aliases.append(a); seen.add(a.lower())
+    return {"source_id": source_id, "brand_name": r["brand_name"], "aliases": aliases,
             "own_domains": _j(r["own_domains"]), "disambiguation_notes": r["disambiguation_notes"],
             "negative_terms": _j(r["negative_terms"])}
 

@@ -100,6 +100,42 @@ CREATE TABLE IF NOT EXISTS fact_rules (
     updated_at TEXT
 );
 
+-- Products within a project (one company/domain can sell several products).
+-- project_id references the main site's sources.id.
+CREATE TABLE IF NOT EXISTS products (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER REFERENCES sources(id),
+    name TEXT NOT NULL,
+    aliases TEXT,                     -- JSON array
+    notes TEXT,
+    is_default INTEGER DEFAULT 0,     -- the main/default product for the project
+    created_at TEXT,
+    UNIQUE(project_id, name)
+);
+
+-- App-wide settings edited in the UI (the single source of truth for model config).
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT
+);
+
+-- Every fact-vs-page evaluation (positive / issue / unclear). Issues also live in
+-- `issues` for the workflow; fact_matches is the complete verdict log for the matrix.
+CREATE TABLE IF NOT EXISTS fact_matches (
+    id INTEGER PRIMARY KEY,
+    fact_rule_id INTEGER REFERENCES fact_rules(id),
+    url_id INTEGER DEFAULT 0,          -- internal page (0 if external)
+    external_page_id INTEGER DEFAULT 0,-- external page (0 if internal)
+    verdict TEXT,                      -- 'positive' | 'issue' | 'unclear'
+    evidence TEXT,                     -- the exact quote from the page
+    matched_value TEXT,                -- the value found on the page
+    product_id INTEGER,
+    checked_at TEXT,
+    run_id INTEGER,
+    UNIQUE(fact_rule_id, url_id, external_page_id)
+);
+
 -- Feature entries (migrated from features.yaml; end-user editable in the UI).
 CREATE TABLE IF NOT EXISTS feature_entries (
     id INTEGER PRIMARY KEY,
@@ -257,6 +293,7 @@ CATEGORIES = [
     "free_claim",
     "language_count",
     "region_count",
+    "regulation_count",
     "feature_claim",
     "faq",
     "cannibalization",
@@ -302,8 +339,16 @@ def connect() -> sqlite3.Connection:
         "urls_new": "INTEGER DEFAULT 0", "urls_changed": "INTEGER DEFAULT 0",
         "urls_removed": "INTEGER DEFAULT 0", "issues_found": "INTEGER DEFAULT 0",
         "issues_fixed": "INTEGER DEFAULT 0",
+        # pipeline-flow counts (READ + MATCH stages)
+        "pages_read": "INTEGER DEFAULT 0", "pages_unreadable": "INTEGER DEFAULT 0",
+        "claims_extracted": "INTEGER DEFAULT 0", "faqs_extracted": "INTEGER DEFAULT 0",
+        "facts_checked": "INTEGER DEFAULT 0", "matches_positive": "INTEGER DEFAULT 0",
+        "matches_issue": "INTEGER DEFAULT 0", "matches_unclear": "INTEGER DEFAULT 0",
     })
-    _ensure_columns(conn, "fact_rules", {"scope": "TEXT DEFAULT 'both'"})
+    _ensure_columns(conn, "fact_rules", {"scope": "TEXT DEFAULT 'both'", "product_id": "INTEGER"})
+    _ensure_columns(conn, "issues", {"product_id": "INTEGER"})
+    _ensure_columns(conn, "sources", {"run_scope": "TEXT", "locale_scope": "TEXT"})
+    _ensure_columns(conn, "jobs", {"scope_label": "TEXT", "run_scope": "TEXT"})
     _ensure_columns(conn, "external_findings", {
         "finding_type": "TEXT", "fact_rule": "TEXT", "page_id": "INTEGER",
         "last_checked_at": "TEXT", "severity": "TEXT DEFAULT 'high'",
@@ -314,8 +359,213 @@ def connect() -> sqlite3.Connection:
         "original_snapshot": "TEXT", "last_checked_at": "TEXT",
     })
     conn.commit()
+    _seed_settings(conn)  # premium model defaults + migrate away any stored :free model
     _conn = conn
     return conn
+
+
+# ---- run scope (analysis + locale) persisted per project ----
+ENGLISH_PRESET = ["us", "uk", "eu", "au", "ca", "nz"]
+# Recommended default: Fact Check only (+ FAQ), English locales — cheapest.
+DEFAULT_RUN_SCOPE = {"fact_check": 1, "technical_seo": 0, "cannibalization": 0, "faq": 1}
+
+
+def project_delete_summary(conn, source_id: int) -> dict:
+    """Counts of everything a project delete would remove (for the confirm dialog)."""
+    one = lambda q, *a: conn.execute(q, a).fetchone()[0]
+    prod_ids = [r["id"] for r in conn.execute("SELECT id FROM products WHERE project_id=?", (source_id,))]
+    rules = 0
+    if prod_ids:
+        marks = ",".join("?" * len(prod_ids))
+        rules = conn.execute(f"SELECT COUNT(*) FROM fact_rules WHERE product_id IN ({marks})",
+                             prod_ids).fetchone()[0]
+    src = conn.execute("SELECT name, location FROM sources WHERE id=?", (source_id,)).fetchone()
+    return {
+        "name": (src["name"] or src["location"]) if src else str(source_id),
+        "pages": one("SELECT COUNT(*) FROM urls WHERE source_id=?", source_id),
+        "matches": one("SELECT COUNT(*) FROM fact_matches WHERE url_id IN "
+                       "(SELECT id FROM urls WHERE source_id=?)", source_id),
+        "findings": one("SELECT COUNT(*) FROM issues WHERE source_id=?", source_id)
+                    + one("SELECT COUNT(*) FROM external_findings WHERE source_id=?", source_id),
+        "rules": rules,
+        "external": one("SELECT COUNT(*) FROM external_pages WHERE source_id=?", source_id),
+        "jobs": one("SELECT COUNT(*) FROM jobs WHERE source_id=?", source_id),
+        "schedules": one("SELECT COUNT(*) FROM schedules WHERE source_id=?", source_id),
+    }
+
+
+def delete_project(conn, source_id: int) -> dict:
+    """Permanently delete a project and every dependent row, in one transaction.
+    Returns an orphan-check dict (all values must be 0). Company-wide fact rules
+    (product_id IS NULL) are shared and NOT deleted."""
+    url_ids = [r["id"] for r in conn.execute("SELECT id FROM urls WHERE source_id=?", (source_id,))]
+    prod_ids = [r["id"] for r in conn.execute("SELECT id FROM products WHERE project_id=?", (source_id,))]
+    try:
+        conn.execute("BEGIN")
+        if url_ids:
+            m = ",".join("?" * len(url_ids))
+            conn.execute(f"DELETE FROM fact_matches WHERE url_id IN ({m})", url_ids)
+            conn.execute(f"DELETE FROM faqs WHERE url_id IN ({m})", url_ids)
+            conn.execute(f"DELETE FROM crawl_results WHERE url_id IN ({m})", url_ids)
+            if FTS_ENABLED:
+                try:
+                    conn.execute(f"DELETE FROM content_fts WHERE url_id IN ({m})", url_ids)
+                except sqlite3.OperationalError:
+                    pass
+        for t in ("issues", "external_findings", "external_snippets", "external_pages",
+                  "brand_profiles", "queries", "jobs", "schedules"):
+            try:
+                conn.execute(f"DELETE FROM {t} WHERE source_id=?", (source_id,))
+            except sqlite3.OperationalError:
+                pass
+        if prod_ids:
+            m = ",".join("?" * len(prod_ids))
+            conn.execute(f"DELETE FROM fact_matches WHERE fact_rule_id IN "
+                         f"(SELECT id FROM fact_rules WHERE product_id IN ({m}))", prod_ids)
+            conn.execute(f"DELETE FROM fact_rules WHERE product_id IN ({m})", prod_ids)
+        conn.execute("DELETE FROM products WHERE project_id=?", (source_id,))
+        conn.execute("DELETE FROM urls WHERE source_id=?", (source_id,))
+        conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    # orphan verification
+    orphans = {
+        "sources": conn.execute("SELECT COUNT(*) FROM sources WHERE id=?", (source_id,)).fetchone()[0],
+        "urls": conn.execute("SELECT COUNT(*) FROM urls WHERE source_id=?", (source_id,)).fetchone()[0],
+        "issues": conn.execute("SELECT COUNT(*) FROM issues WHERE source_id=?", (source_id,)).fetchone()[0],
+        "jobs": conn.execute("SELECT COUNT(*) FROM jobs WHERE source_id=?", (source_id,)).fetchone()[0],
+        "products": conn.execute("SELECT COUNT(*) FROM products WHERE project_id=?", (source_id,)).fetchone()[0],
+        "crawl_results": conn.execute("SELECT COUNT(*) FROM crawl_results WHERE url_id NOT IN "
+                                      "(SELECT id FROM urls)", ()).fetchone()[0] if url_ids else 0,
+    }
+    return orphans
+
+
+def source_domain(conn, source_id: int) -> str | None:
+    """The project's OWN registrable domain (per-project, not the global default).
+    This is the domain the crawler is allowed to fetch for THIS project."""
+    from .util import registrable_domain
+    r = conn.execute("SELECT domain, location FROM sources WHERE id=?", (source_id,)).fetchone()
+    if not r:
+        return None
+    return r["domain"] or registrable_domain(r["location"])
+
+
+def locales_for_source(conn, source_id: int) -> list[dict]:
+    """Detected locales in the project's crawlable URLs, with counts. Root/no-locale
+    pages are grouped as '(root)'. Ordered by count desc."""
+    primary = source_domain(conn, source_id) or ""
+    rows = conn.execute(
+        "SELECT COALESCE(locale,'(root)') loc, COUNT(*) n FROM urls "
+        "WHERE source_id=? AND in_source=1 AND url LIKE ? GROUP BY COALESCE(locale,'(root)') "
+        "ORDER BY (loc='(root)'), n DESC", (source_id, f"%{primary}%")).fetchall()
+    return [{"code": r["loc"], "count": r["n"]} for r in rows]
+
+
+def has_locale_structure(conn, source_id: int) -> bool:
+    return any(l["code"] != "(root)" for l in locales_for_source(conn, source_id))
+
+
+def get_run_config(conn, source_id: int) -> dict:
+    """Saved analysis scope + locale scope for a project (recommended defaults if unset)."""
+    import json as _json
+    r = conn.execute("SELECT run_scope, locale_scope FROM sources WHERE id=?", (source_id,)).fetchone()
+    scope = dict(DEFAULT_RUN_SCOPE)
+    locale = {"mode": "all", "locales": []}
+    if r:
+        try:
+            if r["run_scope"]:
+                scope.update(_json.loads(r["run_scope"]))
+        except (ValueError, TypeError):
+            pass
+        try:
+            if r["locale_scope"]:
+                locale = _json.loads(r["locale_scope"])
+        except (ValueError, TypeError):
+            pass
+    return {"scope": scope, "locale": locale}
+
+
+def set_run_config(conn, source_id: int, scope: dict, locale: dict) -> None:
+    import json as _json
+    conn.execute("UPDATE sources SET run_scope=?, locale_scope=? WHERE id=?",
+                 (_json.dumps(scope), _json.dumps(locale), source_id))
+    conn.commit()
+
+
+def scope_label(scope: dict, locale: dict) -> str:
+    """Human label for a run's coverage, e.g. 'English locales · Fact Check only'."""
+    parts = []
+    if scope.get("fact_check") and not (scope.get("technical_seo") or scope.get("cannibalization")):
+        parts.append("Fact Check only")
+    elif scope.get("technical_seo") and scope.get("fact_check"):
+        parts.append("Full check")
+    else:
+        on = [k for k in ("fact_check", "technical_seo", "cannibalization", "faq") if scope.get(k)]
+        parts.append("+".join(on) or "nothing")
+    mode = (locale or {}).get("mode", "all")
+    loc = {"all": "All locales", "english": "English locales", "custom": "Custom locales"}.get(mode, "All locales")
+    return f"{loc} · {parts[0]}"
+
+
+def get_products(conn, project_id: int) -> list[dict]:
+    """All products defined for a project (main site)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM products WHERE project_id=? ORDER BY is_default DESC, name", (project_id,))]
+
+
+def default_product_id(conn, project_id: int) -> int | None:
+    r = conn.execute(
+        "SELECT id FROM products WHERE project_id=? ORDER BY is_default DESC, id LIMIT 1",
+        (project_id,)).fetchone()
+    return r["id"] if r else None
+
+
+def product_brand_aliases(conn, project_id: int) -> list[str]:
+    """Every product name + alias for a project — these all count as brand aliases
+    so external pages mentioning any product are scoped in under the project."""
+    import json as _json
+    out = []
+    for p in get_products(conn, project_id):
+        if p["name"]:
+            out.append(p["name"])
+        try:
+            out.extend(a for a in _json.loads(p["aliases"] or "[]") if a)
+        except (ValueError, TypeError):
+            pass
+    # de-dupe, preserve order
+    seen, uniq = set(), []
+    for a in out:
+        if a.lower() not in seen:
+            seen.add(a.lower()); uniq.append(a)
+    return uniq
+
+
+def match_product(conn, project_id: int, text: str) -> int | None:
+    """Return the product_id whose name/alias appears in `text`, else None.
+    Used to auto-assign a product to an interpreted fact — never creates a project."""
+    import json as _json
+    if not text:
+        return None
+    t = text.lower()
+    best = None
+    for p in get_products(conn, project_id):
+        if p["is_default"]:  # default matches last (only if nothing more specific hit)
+            continue
+        names = [p["name"]] + (_json.loads(p["aliases"] or "[]") if p["aliases"] else [])
+        if any(n and n.lower() in t for n in names):
+            return p["id"]
+    return best
+
+
+def brand_for_source(conn, source_id, default: str = "SDS Manager") -> str:
+    """The brand/product display name for a site (used in LLM prompts)."""
+    if not source_id:
+        return default
+    r = conn.execute("SELECT brand_name FROM brand_profiles WHERE source_id=?", (source_id,)).fetchone()
+    return r["brand_name"] if r and r["brand_name"] else default
 
 
 def _ensure_columns(conn, table: str, cols: dict[str, str]) -> None:
@@ -419,30 +669,119 @@ def record_issue(
     expected: str | None = None,
     related_url_id: int = 0,
     detection_method: str = "regex",
+    status: str = "open",
+    product_id: int | None = None,
 ) -> None:
     conn.execute(
         """INSERT INTO issues
              (source_id, url_id, detected_at, category, severity, title, detail,
-              evidence, expected, related_url_id, detection_method, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+              evidence, expected, related_url_id, detection_method, product_id, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(url_id, category, title, related_url_id) DO UPDATE SET
              detected_at=excluded.detected_at, severity=excluded.severity,
              detail=excluded.detail, evidence=excluded.evidence,
              expected=excluded.expected, detection_method=excluded.detection_method,
+             product_id=excluded.product_id,
              -- keep user decisions; a soft-deleted finding stays suppressed unless its
              -- evidence text changes (then it's a new finding and reopens).
              status=CASE
                  WHEN issues.status IN ('ignored','false_positive') THEN issues.status
                  WHEN issues.deleted_at IS NOT NULL AND issues.evidence=excluded.evidence THEN issues.status
-                 ELSE 'open' END,
+                 ELSE excluded.status END,
              deleted_at=CASE
                  WHEN issues.deleted_at IS NOT NULL AND issues.evidence!=excluded.evidence THEN NULL
                  ELSE issues.deleted_at END""",
         (
             source_id, url_id, now_iso(), category, severity, title, detail,
-            evidence, expected, related_url_id or 0, detection_method,
+            evidence, expected, related_url_id or 0, detection_method, product_id, status,
         ),
     )
+
+
+def record_match(conn, *, fact_rule_id, verdict: str, url_id: int = 0,
+                 external_page_id: int = 0, evidence: str | None = None,
+                 matched_value: str | None = None, product_id: int | None = None,
+                 run_id: int | None = None) -> None:
+    """Persist a fact-vs-page verdict (positive/issue/unclear). Upserts per (fact,page)."""
+    if not fact_rule_id:
+        return
+    conn.execute(
+        """INSERT INTO fact_matches
+             (fact_rule_id, url_id, external_page_id, verdict, evidence, matched_value,
+              product_id, checked_at, run_id)
+           VALUES (?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(fact_rule_id, url_id, external_page_id) DO UPDATE SET
+             verdict=excluded.verdict, evidence=excluded.evidence,
+             matched_value=excluded.matched_value, product_id=excluded.product_id,
+             checked_at=excluded.checked_at, run_id=excluded.run_id""",
+        (fact_rule_id, url_id or 0, external_page_id or 0, verdict, evidence,
+         matched_value, product_id, now_iso(), run_id),
+    )
+
+
+def clear_matches_for_source(conn, source_id: int) -> None:
+    """Drop internal fact_matches for a source before a full re-scan (fresh counts)."""
+    conn.execute("DELETE FROM fact_matches WHERE url_id IN "
+                 "(SELECT id FROM urls WHERE source_id=?)", (source_id,))
+
+
+def rule_pk(conn, slug: str) -> int | None:
+    r = conn.execute("SELECT id FROM fact_rules WHERE slug=?", (slug,)).fetchone()
+    return r["id"] if r else None
+
+
+# ---- app settings (single source of truth for model config) ----
+def get_setting(conn, key: str, default=None):
+    r = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    return r["value"] if r and r["value"] is not None else default
+
+
+def set_setting(conn, key: str, value) -> None:
+    conn.execute(
+        "INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (key, str(value), now_iso()))
+    conn.commit()
+
+
+def get_model_config(conn) -> dict:
+    """The live model configuration. DB app_settings is authoritative; premium code
+    defaults are the fallback. Free models are never returned as a default."""
+    from .config import DEFAULT_FAST_MODEL, DEFAULT_REASONING_MODEL, DEFAULT_SPEND_CAP_USD
+    fast = get_setting(conn, "fast_model", DEFAULT_FAST_MODEL)
+    reasoning = get_setting(conn, "reasoning_model", DEFAULT_REASONING_MODEL)
+    return {
+        "fast_model": fast,
+        "reasoning_model": reasoning,
+        "interpret_model": get_setting(conn, "interpret_model", reasoning),
+        "spend_cap_usd": float(get_setting(conn, "spend_cap_usd", DEFAULT_SPEND_CAP_USD)),
+    }
+
+
+def _seed_settings(conn) -> None:
+    """Seed premium model defaults on first run, and MIGRATE any stored free model
+    away to premium (so existing installs are fixed, not just fresh ones)."""
+    from .config import (DEFAULT_FAST_MODEL, DEFAULT_REASONING_MODEL,
+                         DEFAULT_REASONING_MODEL as _INTERP, DEFAULT_SPEND_CAP_USD)
+    seeds = {"fast_model": DEFAULT_FAST_MODEL, "reasoning_model": DEFAULT_REASONING_MODEL,
+             "interpret_model": _INTERP, "spend_cap_usd": DEFAULT_SPEND_CAP_USD}
+    for k, v in seeds.items():
+        cur = get_setting(conn, k)
+        # seed if missing; migrate if a free model somehow got stored
+        if cur is None or (k.endswith("_model") and ":free" in (cur or "")):
+            set_setting(conn, k, v)
+    # validate stored model ids against the live catalog; remap a changed id to the
+    # closest current version of the same family (card labels stay the same).
+    try:
+        from .openrouter import validate_id
+        for k in ("fast_model", "reasoning_model", "interpret_model"):
+            cur = get_setting(conn, k)
+            if cur:
+                resolved, remapped = validate_id(cur)
+                if remapped and resolved != cur:
+                    set_setting(conn, k, resolved)
+    except Exception:  # noqa: BLE001 — never let validation block startup (offline/no key)
+        pass
 
 
 def reconcile_fixed(conn, source_id: int, categories: list[str], run_start_iso: str) -> int:

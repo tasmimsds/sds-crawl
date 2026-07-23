@@ -58,23 +58,66 @@ def _backfill_fts(conn) -> int:
     return n
 
 
+_PRODUCT_SEED = [
+    {"name": "SDS Manager", "aliases": ["SDSManager", "SDS Manager app"], "is_default": 1,
+     "notes": "Main SDS management platform."},
+    {"name": "ExactSDS", "aliases": ["Exact SDS", "exactsds"], "is_default": 0,
+     "notes": "SDS authoring/creation product (product of SDS Manager)."},
+]
+
+
+def _primary_project_id(conn) -> int | None:
+    primary = settings()["crawl"]["primary_domain"]
+    r = conn.execute("SELECT id FROM sources WHERE domain=? OR location LIKE ? ORDER BY id LIMIT 1",
+                     (primary, f"%{primary}%")).fetchone()
+    return r["id"] if r else None
+
+
+def _seed_products(conn) -> int:
+    """Seed the default products for the primary project (idempotent)."""
+    pid = _primary_project_id(conn)
+    if not pid:
+        return 0
+    now = now_iso()
+    for p in _PRODUCT_SEED:
+        conn.execute(
+            """INSERT INTO products (project_id, name, aliases, notes, is_default, created_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(project_id, name) DO UPDATE SET
+                 aliases=excluded.aliases, notes=excluded.notes, is_default=excluded.is_default""",
+            (pid, p["name"], json.dumps(p["aliases"]), p["notes"], p["is_default"], now))
+    conn.commit()
+    return len(_PRODUCT_SEED)
+
+
+def _product_map(conn) -> dict:
+    pid = _primary_project_id(conn)
+    if not pid:
+        return {}
+    return {r["name"]: r["id"]
+            for r in conn.execute("SELECT id, name FROM products WHERE project_id=?", (pid,))}
+
+
 def _import_facts(conn) -> int:
     now = now_iso()
+    pmap = _product_map(conn)
     rows = 0
     for f in load_facts():
         conn.execute(
             """INSERT INTO fact_rules
                  (slug, name, description, rule_type, category, correct_value, search_terms,
                   current_patterns, stale_patterns, allowed_patterns, claim_patterns,
-                  require_context, context_window, severity, applies_to, enabled, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)
+                  require_context, context_window, severity, applies_to, product_id,
+                  enabled, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)
                ON CONFLICT(slug) DO UPDATE SET
                  name=excluded.name, description=excluded.description, rule_type=excluded.rule_type,
                  category=excluded.category, correct_value=excluded.correct_value,
                  current_patterns=excluded.current_patterns, stale_patterns=excluded.stale_patterns,
                  allowed_patterns=excluded.allowed_patterns, claim_patterns=excluded.claim_patterns,
                  require_context=excluded.require_context, context_window=excluded.context_window,
-                 severity=excluded.severity, applies_to=excluded.applies_to, updated_at=excluded.updated_at""",
+                 severity=excluded.severity, applies_to=excluded.applies_to,
+                 product_id=excluded.product_id, updated_at=excluded.updated_at""",
             (
                 f["id"], f.get("description", f["id"]), f.get("description"),
                 f.get("type", "stale"), f.get("category"),
@@ -86,7 +129,7 @@ def _import_facts(conn) -> int:
                 json.dumps(f.get("claim_patterns", [])),
                 json.dumps(f.get("require_context", [])),
                 f.get("context_window", 120), f.get("severity", "medium"),
-                f.get("applies_to", "all"), now, now,
+                f.get("applies_to", "all"), pmap.get(f.get("product")), now, now,
             ),
         )
         rows += 1
@@ -125,6 +168,8 @@ def migrate(backup: bool = True) -> dict:
     print(f"FTS5 enabled: {db.FTS_ENABLED}")
     added = _add_issue_query_id(conn)
     print(f"issues.query_id: {'added' if added else 'already present'}")
+    prod_n = _seed_products(conn)
+    print(f"Seeded {prod_n} products for the primary project.")
     facts_n = _import_facts(conn)
     features_n = _import_features(conn)
     print(f"Imported {facts_n} fact rules, {features_n} feature entries from YAML.")

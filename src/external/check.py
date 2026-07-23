@@ -55,10 +55,12 @@ def _store(conn, source_id, kind, fact_name, query, r, verdict_val, reason, expe
 
 async def run_external_fact(conn, source_id: int, fact: dict, clear: bool = True) -> dict:
     """Search the web for the fact and check external claims vs our correct value."""
+    from ..db import brand_for_source
+    brand = brand_for_source(conn, source_id)
     terms = (fact.get("search_terms") or [])[:3]
     topic = fact.get("claim_topic") or fact.get("fact_name") or ""
     correct = (fact.get("correct_value") or "").strip()
-    queries = [f'{BRAND} {t}' for t in terms] + [f"{BRAND} {topic}".strip()]
+    queries = [f'{brand} {t}' for t in terms] + [f"{brand} {topic}".strip()]
     queries = list(dict.fromkeys([q for q in queries if q.strip()]))[:4]
 
     rows = await _gather_serp(queries)
@@ -96,16 +98,19 @@ async def run_external_for_saved_rules(conn, source_id: int, limit: int = 3) -> 
     return total
 
 
-_MENTION_SYS = (
-    "You analyze how third-party web pages talk about the company SDS Manager. For each "
-    "snippet, give sentiment (positive|neutral|negative) toward SDS Manager and a one-line "
-    "summary of what the page says about it. Respond ONLY with JSON."
-)
+def _mention_sys(brand):
+    return (
+        f"You analyze how third-party web pages talk about the company {brand}. For each "
+        f"snippet, give sentiment (positive|neutral|negative) toward {brand} and a one-line "
+        "summary of what the page says about it. Respond ONLY with JSON."
+    )
 
 
 async def run_external_mentions(conn, source_id: int) -> dict:
-    queries = [BRAND, f"{BRAND} review", f"{BRAND} vs", f"{BRAND} alternative",
-               f'"{BRAND}" SDS software']
+    from ..db import brand_for_source
+    brand = brand_for_source(conn, source_id)
+    queries = [brand, f"{brand} review", f"{brand} vs", f"{brand} alternative",
+               f'"{brand}" SDS software']
     rows = await _gather_serp(queries)
     llm = LlmClient(conn)
     counts = {"positive": 0, "neutral": 0, "negative": 0}
@@ -117,7 +122,7 @@ async def run_external_mentions(conn, source_id: int) -> dict:
                        for k, c in enumerate(chunk)]
             data = await llm.call_json(
                 task="ext_mention", model=llm.fast_model,
-                cache_key=sha256(json.dumps(payload)) + "|mention", system=_MENTION_SYS,
+                cache_key=sha256(json.dumps(payload)) + "|mention", system=_mention_sys(brand),
                 user=("Snippets (JSON):\n" + json.dumps(payload, ensure_ascii=False) +
                       '\n\nReturn JSON {"items":[{"i":<index>,"sentiment":"positive|neutral|negative",'
                       '"summary":"one line"}]}.'),

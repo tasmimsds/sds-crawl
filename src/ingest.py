@@ -15,7 +15,7 @@ import httpx
 
 from .config import settings
 from .db import add_source, set_hreflang_group, upsert_url
-from .util import DSU, host_of, parse_locale_section, registrable_domain
+from .util import DSU, host_excluded, host_of, parse_locale_section, registrable_domain
 
 
 def _client() -> httpx.Client:
@@ -33,14 +33,27 @@ def _localname(tag: str) -> str:
 
 # ---- source kind detection ----------------------------------------------
 
+_BARE_DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?:/.*)?$", re.I)
+
+
+def normalize_ref(ref: str) -> str:
+    """A bare domain/homepage gets an https:// scheme so it resolves as a root URL."""
+    ref = (ref or "").strip()
+    if ref and "://" not in ref and not Path(ref).exists() and _BARE_DOMAIN_RE.match(ref):
+        return "https://" + ref
+    return ref
+
+
 def detect_kind(ref: str) -> str:
     p = Path(ref)
     if p.exists() and p.suffix.lower() in (".txt", ".csv"):
         return "urllist"
     low = ref.lower()
-    if low.endswith(".xml") or "sitemap" in low:
+    if low.endswith(".xml") or low.endswith(".xml.gz") or "sitemap" in low:
         return "sitemap"
     if low.startswith("http://") or low.startswith("https://"):
+        return "root"
+    if _BARE_DOMAIN_RE.match(low):  # bare domain like "clovion.ai" -> treat as root
         return "root"
     raise ValueError(f"Cannot determine source kind for: {ref}")
 
@@ -99,7 +112,7 @@ def _collect_sitemap_entries(client, entry_urls, seen=None) -> list[dict]:
         except Exception as exc:  # noqa: BLE001
             print(f"  ! failed to fetch sitemap {url}: {exc}")
             continue
-        children, entries = _parse_sitemap_xml(resp.content)
+        children, entries = _parse_sitemap_xml(_maybe_gunzip(url, resp.content))
         if children:
             print(f"  {url} -> sitemap index with {len(children)} children")
             out.extend(_collect_sitemap_entries(client, children, seen))
@@ -110,11 +123,12 @@ def _collect_sitemap_entries(client, entry_urls, seen=None) -> list[dict]:
 
 # ---- hreflang grouping + storage -----------------------------------------
 
-def _store_entries(conn, source_id: int, entries: list[dict]) -> dict:
+def _store_entries(conn, source_id: int, entries: list[dict], primary: str | None = None) -> dict:
     dsu = DSU()
     all_urls: set[str] = set()
     external = 0
-    primary = settings()["crawl"]["primary_domain"]
+    from .db import source_domain
+    primary = primary or source_domain(conn, source_id) or settings()["crawl"]["primary_domain"]
 
     for e in entries:
         loc = e["loc"]
@@ -138,8 +152,11 @@ def _store_entries(conn, source_id: int, entries: list[dict]) -> dict:
             next_gid += 1
 
     lastmod_of = {e["loc"]: e["lastmod"] for e in entries}
+    exclude = settings()["crawl"].get("exclude_hosts") or []
     on_domain = 0
     for url in sorted(all_urls):
+        if host_excluded(url, exclude):
+            continue  # never ingest excluded hosts (e.g. admin55.sdsmanager.com)
         locale, section = parse_locale_section(url)
         uid = upsert_url(conn, source_id, url, locale, section, lastmod_of.get(url))
         gid = group_id_of.get(url)
@@ -189,7 +206,34 @@ def _store_url_list(conn, source_id: int, urls: list[str]) -> dict:
 # ---- root URL discovery ---------------------------------------------------
 
 _SITEMAP_RE = re.compile(r"^sitemap:\s*(\S+)", re.IGNORECASE | re.MULTILINE)
-COMMON_SITEMAP_PATHS = ["/sitemap.xml", "/sitemap/sitemap.xml", "/sitemap/sitemap-0.xml", "/sitemap_index.xml"]
+COMMON_SITEMAP_PATHS = [
+    "/sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml", "/sitemap/sitemap.xml",
+    "/sitemap/sitemap-0.xml", "/wp-sitemap.xml", "/sitemap1.xml", "/page-sitemap.xml",
+]
+
+
+def canonical_base(client, url: str) -> str:
+    """Follow redirects (http→https, apex↔www) and return the final scheme://host."""
+    from urllib.parse import urlparse
+    try:
+        r = client.get(url)
+        p = urlparse(str(r.url))
+        if p.scheme and p.netloc:
+            return f"{p.scheme}://{p.netloc}"
+    except Exception:  # noqa: BLE001
+        pass
+    return url.rstrip("/")
+
+
+def _maybe_gunzip(url: str, content: bytes) -> bytes:
+    """Decompress gzipped sitemaps (by .gz extension or gzip magic bytes)."""
+    if url.lower().endswith(".gz") or content[:2] == b"\x1f\x8b":
+        import gzip
+        try:
+            return gzip.decompress(content)
+        except Exception:  # noqa: BLE001
+            return content
+    return content
 
 
 def _discover_sitemaps(client, root: str) -> list[str]:
@@ -207,8 +251,10 @@ def _discover_sitemaps(client, root: str) -> list[str]:
         candidate = urljoin(root, path)
         try:
             r = client.get(candidate)
-            if r.status_code < 400 and b"<" in r.content[:200] and (
-                b"urlset" in r.content or b"sitemapindex" in r.content
+            body = _maybe_gunzip(candidate, r.content)
+            # validate by CONTENT, not content-type header
+            if r.status_code < 400 and b"<" in body[:512] and (
+                b"urlset" in body or b"sitemapindex" in body
             ):
                 print(f"  discovered sitemap at {candidate}")
                 return [candidate]
@@ -243,7 +289,8 @@ def _link_crawl(client, root: str, cap: int = 500) -> list[str]:
             if not href:
                 continue
             absu = urljoin(url, href).split("#")[0]
-            if registrable_domain(absu) == domain and absu not in seen:
+            if (registrable_domain(absu) == domain and absu not in seen
+                    and not host_excluded(absu, settings()["crawl"].get("exclude_hosts") or [])):
                 queue.append(absu)
     print(f"  link-crawl fallback discovered {len(found)} URLs")
     return found
@@ -252,29 +299,40 @@ def _link_crawl(client, root: str, cap: int = 500) -> list[str]:
 # ---- public API -----------------------------------------------------------
 
 def add_and_ingest(conn, ref: str, name: str | None = None) -> dict:
+    ref = normalize_ref(ref)  # bare domain -> https://domain
     kind = detect_kind(ref)
-    location = str(Path(ref).resolve()) if kind == "urllist" else ref
-    domain = None if kind == "urllist" else registrable_domain(ref)
-    source_id = add_source(conn, kind, location, name, domain)
 
-    print(f"Source #{source_id} ({kind}): {location}")
     with _client() as client:
-        if kind == "sitemap":
-            entries = _collect_sitemap_entries(client, [location])
-            print(f"  {len(entries)} <url> entries")
-            stats = _store_entries(conn, source_id, entries)
-        elif kind == "urllist":
-            urls = _read_url_list(location)
-            stats = _store_url_list(conn, source_id, urls)
-        else:  # root
-            sitemaps = _discover_sitemaps(client, location)
+        if kind == "root":
+            # resolve the canonical scheme/host (http→https, apex↔www) BEFORE probing paths
+            base = canonical_base(client, ref)
+            domain = registrable_domain(base)
+            source_id = add_source(conn, kind, base, name, domain)
+            print(f"Source #{source_id} (root): {base}")
+            sitemaps = _discover_sitemaps(client, base)
             if sitemaps:
                 entries = _collect_sitemap_entries(client, sitemaps)
                 print(f"  {len(entries)} <url> entries from discovered sitemap(s)")
-                stats = _store_entries(conn, source_id, entries)
+                stats = _store_entries(conn, source_id, entries, primary=domain)
+                if not entries:  # index resolved to nothing -> fall back to link crawl
+                    print("  ! sitemap(s) yielded 0 URLs — falling back to link crawl")
+                    stats = _store_url_list(conn, source_id, _link_crawl(client, base))
             else:
-                urls = _link_crawl(client, location)
-                stats = _store_url_list(conn, source_id, urls)
+                print("  No sitemap found — discovering pages by following links instead")
+                stats = _store_url_list(conn, source_id, _link_crawl(client, base))
+        elif kind == "sitemap":
+            location = ref
+            domain = registrable_domain(ref)
+            source_id = add_source(conn, kind, location, name, domain)
+            print(f"Source #{source_id} (sitemap): {location}")
+            entries = _collect_sitemap_entries(client, [location])
+            print(f"  {len(entries)} <url> entries")
+            stats = _store_entries(conn, source_id, entries, primary=domain)
+        else:  # urllist
+            location = str(Path(ref).resolve())
+            source_id = add_source(conn, kind, location, name, None)
+            print(f"Source #{source_id} (urllist): {location}")
+            stats = _store_url_list(conn, source_id, _read_url_list(location))
 
     stats["source_id"] = source_id
     print(

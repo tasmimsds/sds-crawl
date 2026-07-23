@@ -50,7 +50,12 @@
       <select name="applies_to">
         {% for a in ['all','english_only'] %}<option value="{{ a }}" {{ 'selected' if rule and rule.applies_to==a }}>{{ a }}</option>{% endfor %}
       </select></label>
-    <div></div>
+    <label class="field"><span>Product</span>
+      <select name="product_id">
+        <option value="" {{ 'selected' if not (rule and rule.product_id) }}>Any / company-wide</option>
+        {% for p in products %}<option value="{{ p.id }}" {{ 'selected' if rule and rule.product_id==p.id }}>{{ p.name }}</option>{% endfor %}
+      </select>
+      <small class="muted">Company-wide facts apply to any product; product-scoped facts flag claims about that product.</small></label>
   </div>
 
   <div class="form-actions">

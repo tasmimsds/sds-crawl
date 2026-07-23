@@ -72,6 +72,7 @@ async def run_fact(conn, source_id: int, fact: dict) -> dict:
             detail=r.get("verdict_reason") or f"Contradicts expected value: {correct}",
             evidence=_MARK.sub("", r["snippet"]), expected=correct or None,
             detection_method=r.get("how", "llm"),
+            product_id=fact.get("product_id"),
         )
         title = f"fact:{(fact.get('fact_name') or 'fact')[:48]}"
         conn.execute("UPDATE issues SET query_id=? WHERE source_id=? AND url_id=? AND title=?",

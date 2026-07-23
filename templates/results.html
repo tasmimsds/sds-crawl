@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ title }} — SDS Fact Check{% endblock %}
 {% block content %}
+{% if seo_note %}
+<div class="alert alert-error" style="background:#fff7e8;color:#8a5a09;border-color:#f6d99a">
+  ⚠ SEO checks were skipped in the last sync — run a <b>Full check</b> to update this section.
+  Showing the last SEO data{% if seo_note.asof %} (as of {{ reltime(seo_note.asof) }}){% endif %}.
+</div>
+{% endif %}
 <div class="page-head"><h1>{{ title }}</h1>
   <p class="muted">Click a row for details and actions. Detection can be wrong — recheck, edit, mark incorrect, or delete any finding.</p></div>
 
@@ -28,8 +34,12 @@
     {% for l in locales %}<option value="{{ l }}" {{ 'selected' if request.query_params.get('locale')==l }}>{{ l }}</option>{% endfor %}
   </select>{% endif %}
   <select name="status" onchange="this.form.submit()">
-    {% for st in ['open','fixed','ignored','false_positive','unverifiable'] %}<option value="{{ st }}" {{ 'selected' if request.query_params.get('status','open')==st }}>{{ st.replace('_',' ') }}</option>{% endfor %}
+    {% for st in ['open','unclear','fixed','ignored','false_positive','unverifiable'] %}<option value="{{ st }}" {{ 'selected' if request.query_params.get('status','open')==st }}>{{ st.replace('_',' ') }}</option>{% endfor %}
   </select>
+  {% if products %}<select name="product" onchange="this.form.submit()">
+    <option value="">All products</option>
+    {% for p in products %}<option value="{{ p.id }}" {{ 'selected' if request.query_params.get('product')==(p.id|string) }}>{{ p.name }}</option>{% endfor %}
+  </select>{% endif %}
   <button class="btn btn-sm" type="button" onclick="recheckSection('{{ request.query_params.get('category','') }}')">Recheck this view</button>
   <span class="muted small" id="bulk-msg"></span>
 </form>
@@ -41,7 +51,7 @@
     {% for i in rows %}
       <tr class="issue-row" id="row-{{ i.id }}" onclick="toggleDetail(this)">
         <td><span class="badge sev-{{ i.severity }}">{{ i.severity }}</span></td>
-        <td class="muted small">{{ i.category|cat_label }}</td>
+        <td class="muted small">{{ i.category|cat_label }}{% if i.product_name %}<br><span class="pill">{{ i.product_name }}</span>{% endif %}</td>
         <td><a class="url" href="{{ i.url }}" target="_blank" title="{{ i.url }}" onclick="event.stopPropagation()">{{ i.url|short_url }}</a></td>
         <td>{{ i.locale or '' }}</td>
         <td>{{ i.title|pretty_title }}{% if i.edited %} <span class="pill">edited</span>{% endif %}</td>
