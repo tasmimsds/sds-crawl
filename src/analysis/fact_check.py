@@ -110,7 +110,7 @@ async def fact_check_llm(conn, source_id: int, *, all_locales: bool = False):
                     severity=item.get("severity", "medium"),
                     title=f"llm:{cat}:{(item.get('expected') or quote)[:32]}",
                     detail=item.get("explanation"), evidence=quote,
-                    expected=item.get("expected"), detection_method="llm",
+                    expected=item.get("expected"), detection_method="ai_screen",
                 )
                 stats["issues"] += 1
         return run
@@ -119,5 +119,6 @@ async def fact_check_llm(conn, source_id: int, *, all_locales: bool = False):
     conn.commit()
     llm.log_usage()
     print(f"LLM fact-check: {stats['flagged']} pages flagged, {stats['issues']} confirmed issues "
-          f"across {len(pages)} pages.")
-    return stats["issues"]
+          f"across {len(pages)} pages." + (" (INCOMPLETE — paused on cost/key cap)" if llm.paused else ""))
+    # completed = the pass actually ran to the end without pausing (so reconcile may trust it)
+    return {"issues": stats["issues"], "completed": bool(llm.enabled) and not llm.paused}

@@ -1,7 +1,7 @@
 """External mismatch detection — FUTURE SCOPE. Do NOT implement yet.
 
 This is the documented extension point for the second analysis scope. Where the
-*internal* passes (facts/positioning/free/counts/features/faqs/cannibalization)
+*internal* passes (facts/positioning/free/counts/features/faqs)
 check SDS Manager pages against our own source-of-truth registry and against each
 other, the *external* scope will check SDS Manager's claims against sources
 OUTSIDE our control — e.g. regulatory/standards text (OSHA, REACH, CLP/GHS

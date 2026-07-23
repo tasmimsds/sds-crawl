@@ -20,10 +20,6 @@ crawl:
   exclude_hosts:
     - "admin55.sdsmanager.com"
 
-thresholds:
-  thin_content_words: 150
-  slow_response_ms: 3000
-
 llm:
   base_url: "https://openrouter.ai/api/v1"
   # NOTE: model names are NOT configured here. The single source of truth is the DB
@@ -36,10 +32,6 @@ llm:
   temperature: 0
   # Locales that get LLM analysis by default. Regex + inventory run on ALL locales.
   english_locales: ["us", "uk", "eu", "au", "ca", "nz"]
-
-cannibalization:
-  similarity_threshold: 0.55
-  max_pairs_per_locale: 40
 
 paths:
   db: "data/crawl.db"

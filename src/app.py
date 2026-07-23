@@ -71,12 +71,11 @@ def _fromjson(v):
 
 
 _CAT_LABELS = {
-    "status": "Status", "crawl": "Crawl health", "seo_technical": "Technical SEO",
     "database_size": "Database size", "positioning": "Positioning",
     "free_claim": "Free-plan claim", "language_count": "Language count",
     "region_count": "Region count", "regulation_count": "Regulation count",
     "feature_claim": "Feature claim", "faq": "FAQ",
-    "cannibalization": "Cannibalization", "other_mismatch": "Other mismatch",
+    "other_mismatch": "Other mismatch", "external_mismatch": "External mismatch",
 }
 
 
@@ -130,7 +129,6 @@ templates.env.filters["comma"] = _comma
 
 FACT_CATS = ("database_size", "positioning", "free_claim", "language_count",
              "region_count", "regulation_count", "feature_claim", "faq", "other_mismatch")
-HEALTH_CATS = ("status", "crawl", "seo_technical", "cannibalization")
 
 
 def _conn():
@@ -164,12 +162,11 @@ def _count(conn, sid, cats, status="open"):
 
 def _nav(conn, active_src, srcs):
     nav = {"sources": srcs, "active_site": active_src,
-           "open_issues": 0, "failing_rules": 0, "health_errors": 0}
+           "open_issues": 0, "failing_rules": 0}
     if active_src:
         sid = active_src["id"]
-        nav["open_issues"] = _count(conn, sid, FACT_CATS + HEALTH_CATS)
+        nav["open_issues"] = _count(conn, sid, FACT_CATS)
         nav["failing_rules"] = _count(conn, sid, FACT_CATS)
-        nav["health_errors"] = _count(conn, sid, HEALTH_CATS)
     return nav
 
 
@@ -615,56 +612,155 @@ def _issue_rows(conn, sid, cats, request):
     return [dict(r) for r in conn.execute(sql, params)]
 
 
+def _findings_from_model(conn, sid, model, limit=500):
+    """Compile an Advanced Filter model to parameterized queries over issues (internal)
+    and external_findings (external), selected by the model's scope toggles."""
+    from .filters import EXTERNAL_FIELDS, FINDINGS_FIELDS, compile_model, scopes_of
+    sc = scopes_of(model)
+    groups = (model or {}).get("groups", [])
+    has_status = any(g.get("field") == "status" for g in groups)
+    inc_int = sc.get("internal", True)
+    inc_ext = sc.get("external", False)
+    if not sc:  # empty scopes -> default internal
+        inc_int, inc_ext = True, False
+    rows, ext_rows = [], []
+    if inc_int:
+        where, pr = compile_model(model, FINDINGS_FIELDS)
+        base, p = ["i.source_id=?", "i.deleted_at IS NULL"], [sid]
+        if not has_status:
+            base.append("i.status='open'")
+        if where:
+            base.append(f"({where})"); p += pr
+        rows = [dict(r) for r in conn.execute(
+            f"""SELECT i.id,u.url,u.locale,i.category,i.severity,i.title,i.detail,i.evidence,
+                   i.expected,i.detection_method,i.status,i.note,i.edited,i.last_checked_at,
+                   i.product_id, pp.name AS product_name, ru.url AS related_url
+               FROM issues i JOIN urls u ON u.id=i.url_id
+               LEFT JOIN urls ru ON ru.id=i.related_url_id
+               LEFT JOIN products pp ON pp.id=i.product_id
+               WHERE {' AND '.join(base)}
+               ORDER BY CASE i.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                        WHEN 'medium' THEN 2 ELSE 3 END, u.url LIMIT ?""", (*p, limit))]
+    if inc_ext:
+        where, pr = compile_model(model, EXTERNAL_FIELDS)
+        base, p = ["ef.source_id=?", "ef.deleted_at IS NULL", "ef.kind='factcheck'"], [sid]
+        if not has_status:
+            base.append("ef.status='open'")
+        if where:
+            base.append(f"({where})"); p += pr
+        ext_rows = [dict(r) for r in conn.execute(
+            f"""SELECT ef.id,ef.domain,ef.external_url,ef.snippet,ef.verdict,ef.reason,ef.expected,
+                   ef.finding_type,ef.severity,ef.status FROM external_findings ef
+               WHERE {' AND '.join(base)} ORDER BY ef.domain LIMIT ?""", (*p, limit))]
+    return rows, ext_rows
+
+
+def _parse_filter_param(conn, request):
+    """Return a filter model from ?saved=<id> or ?filter=<url-encoded JSON>, else None."""
+    import json as _json
+    saved = request.query_params.get("saved")
+    if saved and saved.isdigit():
+        from .filters import get_filter
+        return get_filter(conn, int(saved))
+    raw = request.query_params.get("filter")
+    if raw:
+        try:
+            return _json.loads(raw)
+        except ValueError:
+            return None
+    return None
+
+
 @app.get("/results", response_class=HTMLResponse)
 def results(request: Request):
     conn = _conn()
     active_src, _ = _active_source(request, conn)
     scope = request.query_params.get("scope", "internal")
     rows, ext_rows, locales = [], [], []
+    model = _parse_filter_param(conn, request)
     if active_src:
-        if scope in ("internal", "all"):
-            rows = _issue_rows(conn, active_src["id"], FACT_CATS + HEALTH_CATS, request)
-            locales = [r["locale"] for r in conn.execute(
-                "SELECT DISTINCT locale FROM urls WHERE source_id=? AND locale IS NOT NULL ORDER BY locale",
-                (active_src["id"],))]
-        if scope in ("external", "all"):
-            ext_rows = [dict(r) for r in conn.execute(
-                """SELECT id, domain, external_url, snippet, verdict, reason, expected,
-                          finding_type, severity, status FROM external_findings
-                   WHERE source_id=? AND kind='factcheck' AND deleted_at IS NULL AND status='open'
-                   ORDER BY domain""", (active_src["id"],))]
+        locales = [r["locale"] for r in conn.execute(
+            "SELECT DISTINCT locale FROM urls WHERE source_id=? AND locale IS NOT NULL ORDER BY locale",
+            (active_src["id"],))]
+        if model is not None:  # advanced filter path
+            rows, ext_rows = _findings_from_model(conn, active_src["id"], model)
+        else:  # flat legacy path (tabs)
+            if scope in ("internal", "all"):
+                rows = _issue_rows(conn, active_src["id"], FACT_CATS, request)
+            if scope in ("external", "all"):
+                ext_rows = [dict(r) for r in conn.execute(
+                    """SELECT id, domain, external_url, snippet, verdict, reason, expected,
+                              finding_type, severity, status FROM external_findings
+                       WHERE source_id=? AND kind='factcheck' AND deleted_at IS NULL AND status='open'
+                       ORDER BY domain""", (active_src["id"],))]
     products = get_products(conn, active_src["id"]) if active_src else []
+    from .filters import list_filters
+    saved = list_filters(conn, active_src["id"], "findings") if active_src else []
     return render(request, "results.html", "results",
                   {"rows": rows, "ext_rows": ext_rows, "scope": scope, "locales": locales,
-                   "products": products,
-                   "cats": FACT_CATS + HEALTH_CATS, "title": "Results & Issues"})
+                   "products": products, "saved_filters": saved,
+                   "filter_json": request.query_params.get("filter", ""),
+                   "cats": FACT_CATS, "title": "Results & Issues"})
 
 
-@app.get("/site-health", response_class=HTMLResponse)
-def site_health(request: Request):
-    import json as _json
+@app.get("/results/export.csv")
+def results_export_csv(request: Request):
+    """CSV of the current findings view — respects the active advanced filter (live, UTF-8 BOM)."""
+    from .report.csv_export import build_rows_csv
     conn = _conn()
     active_src, _ = _active_source(request, conn)
-    rows = _issue_rows(conn, active_src["id"], HEALTH_CATS, request) if active_src else []
-    seo_note = None
-    if active_src:
-        last = conn.execute(
-            "SELECT run_scope FROM jobs WHERE source_id=? AND type='sync' AND status='done' "
-            "AND run_scope IS NOT NULL ORDER BY id DESC LIMIT 1", (active_src["id"],)).fetchone()
-        scope = None
-        if last and last["run_scope"]:
-            try:
-                scope = _json.loads(last["run_scope"])
-            except ValueError:
-                scope = None
-        if scope is not None and not scope.get("technical_seo"):
-            asof = conn.execute(
-                "SELECT MAX(detected_at) d FROM issues WHERE source_id=? AND category IN "
-                "('status','crawl','seo_technical')", (active_src["id"],)).fetchone()["d"]
-            seo_note = {"asof": asof}
-    return render(request, "results.html", "health",
-                  {"rows": rows, "locales": [], "cats": HEALTH_CATS,
-                   "title": "Site Health", "seo_note": seo_note})
+    model = _parse_filter_param(conn, request)
+    if model is None:
+        model = {"scopes": {"internal": True}}
+    rows, ext_rows = _findings_from_model(conn, active_src["id"], model, limit=100000) if active_src else ([], [])
+    return _csv_response(build_rows_csv(rows, ext_rows), "findings_filtered.csv")
+
+
+@app.get("/filters/count.json")
+def filters_count(request: Request):
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    model = _parse_filter_param(conn, request)
+    if not active_src or model is None:
+        return JSONResponse({"count": 0})
+    rows, ext_rows = _findings_from_model(conn, active_src["id"], model, limit=100000)
+    return JSONResponse({"count": len(rows) + len(ext_rows),
+                         "internal": len(rows), "external": len(ext_rows)})
+
+
+@app.post("/filters/save")
+async def filters_save(request: Request):
+    from .filters import save_filter
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    form = await request.form()
+    import json as _json
+    try:
+        model = _json.loads(form.get("model") or "{}")
+    except ValueError:
+        return JSONResponse({"error": "bad model"}, status_code=400)
+    name = (form.get("name") or "").strip()
+    context = form.get("context") or "findings"
+    if not name or not active_src:
+        return JSONResponse({"error": "name required"}, status_code=400)
+    save_filter(conn, active_src["id"], context, name, model)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/filters/list.json")
+def filters_list(request: Request):
+    from .filters import list_filters
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    ctx = request.query_params.get("context", "findings")
+    return JSONResponse({"filters": list_filters(conn, active_src["id"], ctx) if active_src else []})
+
+
+@app.post("/filters/{fid}/delete")
+def filters_delete(fid: int):
+    from .filters import delete_filter
+    delete_filter(_conn(), fid)
+    return JSONResponse({"ok": True})
 
 
 # ---- Facts Library (read-only list for now) ----
@@ -831,24 +927,71 @@ async def facts_import(request: Request, file: UploadFile = File(...)):
 
 
 # ---- Reports ----
+def _csv_response(text: str, filename: str):
+    from fastapi.responses import Response
+    return Response(text, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
 @app.get("/reports", response_class=HTMLResponse)
 def reports_page(request: Request):
     conn = _conn()
-    files = sorted((p.name for p in _out.glob("*.html")), reverse=True)[:5]
-    csvs = sorted(p.name for p in _out.glob("*.csv"))
-    return render(request, "reports.html", "reports", {"html_files": files, "csv_files": csvs})
+    active_src, _ = _active_source(request, conn)
+    # live per-category open counts from the DB (download links regenerate on click)
+    cats = []
+    if active_src:
+        for cat in FACT_CATS:
+            n = conn.execute("SELECT COUNT(*) c FROM issues WHERE source_id=? AND category=? "
+                             "AND status='open' AND deleted_at IS NULL",
+                             (active_src["id"], cat)).fetchone()["c"]
+            alln = conn.execute("SELECT COUNT(*) c FROM issues WHERE source_id=? AND category=? "
+                                "AND deleted_at IS NULL", (active_src["id"], cat)).fetchone()["c"]
+            if alln:
+                cats.append({"cat": cat, "open": n, "all": alln})
+        ext_open = conn.execute("SELECT COUNT(*) c FROM external_findings WHERE source_id=? "
+                                "AND kind='factcheck' AND deleted_at IS NULL AND status='open'",
+                                (active_src["id"],)).fetchone()["c"]
+    else:
+        ext_open = 0
+    html_files = sorted((p.name for p in _out.glob("*.html")), reverse=True)[:5]
+    return render(request, "reports.html", "reports",
+                  {"cats": cats, "ext_open": ext_open, "html_files": html_files})
 
 
-@app.post("/reports/export")
-async def reports_export(request: Request):
-    from .report.csv_export import export_csv
-    from .report.html_report import generate_html
-
+@app.get("/reports/download.csv")
+def reports_download_csv(request: Request, category: str = "", scope: str = "open"):
+    """Live-generated CSV (UTF-8 BOM), regenerated from the DB on every download."""
+    from .report.csv_export import build_issue_csv
     conn = _conn()
     active_src, _ = _active_source(request, conn)
     if not active_src:
         return JSONResponse({"error": "no site"}, status_code=400)
-    await run_in_threadpool(export_csv, conn, active_src["id"])
+    scope = "all" if scope == "all" else "open"
+    cat = category or None
+    text = build_issue_csv(conn, active_src["id"], cat, scope)
+    fname = (f"issues_{cat}_{scope}.csv" if cat else f"findings_all_{scope}.csv")
+    return _csv_response(text, fname)
+
+
+@app.get("/reports/download-external.csv")
+def reports_download_external(request: Request, scope: str = "open"):
+    from .report.csv_export import build_external_csv
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return JSONResponse({"error": "no site"}, status_code=400)
+    scope = "all" if scope == "all" else "open"
+    return _csv_response(build_external_csv(conn, active_src["id"], scope), f"external_findings_{scope}.csv")
+
+
+@app.post("/reports/export")
+async def reports_export(request: Request):
+    """Generate a fresh timestamped HTML report (CSVs download live via /reports/download.csv)."""
+    from .report.html_report import generate_html
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return JSONResponse({"error": "no site"}, status_code=400)
     path = await run_in_threadpool(generate_html, conn, active_src["id"])
     return JSONResponse({"html": "/output/" + path.name})
 
@@ -1069,22 +1212,43 @@ def _has_active(conn, sid):
 
 
 def _scope_from_form(form) -> dict:
-    mode = form.get("mode", "fact")
-    if mode == "full":
-        return {"fact_check": 1, "technical_seo": 1, "cannibalization": 1, "faq": 1}
-    if mode == "fact":
-        return {"fact_check": 1, "technical_seo": 0, "cannibalization": 0, "faq": 1}
-    # custom — read individual toggles
-    on = lambda k: 1 if form.get(k) in ("1", "on", "true") else 0
-    return {"fact_check": on("fact_check"), "technical_seo": on("technical_seo"),
-            "cannibalization": on("cannibalization"), "faq": on("faq")}
+    # This tool is fact-check only: every crawl reads content + runs fact matching (incl. FAQ).
+    return {"fact_check": 1, "faq": 1}
 
 
 def _locale_from_form(form) -> dict:
+    import json as _json
     mode = form.get("locale_mode", "all")
+    if mode == "advanced":
+        try:
+            flt = _json.loads(form.get("crawl_filter") or "{}")
+        except ValueError:
+            flt = {}
+        return {"mode": "advanced", "filter": flt}
     if mode == "custom":
         return {"mode": "custom", "locales": form.getlist("locales")}
     return {"mode": mode, "locales": []}
+
+
+@app.get("/sites/{source_id}/scope-count.json")
+def scope_count(source_id: int, request: Request):
+    """Live URL count for an advanced crawl-scope filter (before fetching)."""
+    from .filters import CRAWL_FIELDS, compile_model
+    import json as _json
+    conn = _conn()
+    total = conn.execute("SELECT COUNT(*) c FROM urls WHERE source_id=? AND in_source=1",
+                         (source_id,)).fetchone()["c"]
+    try:
+        model = _json.loads(request.query_params.get("filter") or "{}")
+    except ValueError:
+        model = {}
+    where, params = compile_model(model, CRAWL_FIELDS)
+    sql = "SELECT COUNT(*) c FROM urls u WHERE source_id=? AND in_source=1"
+    p = [source_id]
+    if where:
+        sql += f" AND ({where})"; p += params
+    sel = conn.execute(sql, p).fetchone()["c"]
+    return JSONResponse({"selected": sel, "total": total})
 
 
 @app.get("/sites/{source_id}/scope-info.json")
@@ -1094,15 +1258,18 @@ def scope_info(source_id: int):
     locales = locales_for_source(conn, source_id)
     detected = {l["code"] for l in locales}
     total = sum(l["count"] for l in locales)
+    sections = [{"code": r["s"], "count": r["c"]} for r in conn.execute(
+        "SELECT COALESCE(section,'(root)') s, COUNT(*) c FROM urls WHERE source_id=? AND in_source=1 "
+        "GROUP BY COALESCE(section,'(root)') ORDER BY c DESC LIMIT 40", (source_id,))]
     english = [c for c in ENGLISH_PRESET if c in detected]
     # LLM only touches English + root pages; those drive the cost estimate
     llm_codes = set(english) | {"(root)"}
     llm_total = sum(l["count"] for l in locales if l["code"] in llm_codes)
     return JSONResponse({
-        "locales": locales, "total": total, "english": english,
+        "locales": locales, "sections": sections, "total": total, "english": english,
         "english_llm_total": llm_total, "has_locale": has_locale_structure(conn, source_id),
         "saved": get_run_config(conn, source_id),
-        # rough per-LLM-page $ (screening+verify+faq); full adds cannibalization/features
+        # rough per-LLM-page $ (screening + verify + faq)
         "rate": {"fact": 0.0041, "full": 0.0137}, "sec_per_page": 0.7, "concurrency": 8,
     })
 

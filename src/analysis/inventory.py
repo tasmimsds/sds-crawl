@@ -131,7 +131,7 @@ def export_claims(conn, source_id: int):
     out_path = resolve_path(f"{settings()['paths']['output_dir']}/detected_claims.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     n = 0
-    with open(out_path, "w", newline="", encoding="utf-8") as fh:
+    with open(out_path, "w", newline="", encoding="utf-8-sig") as fh:  # BOM for Excel
         w = csv.writer(fh)
         w.writerow(["kind", "value", "frequency", "example_url", "example_quote"])
         for kind, data in inv.items():

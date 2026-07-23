@@ -110,15 +110,6 @@ def crawl(
 
 
 # ---- analyze ----
-@analyze_app.command("technical")
-def analyze_technical(source: str):
-    from .analysis.technical import analyze_technical as run
-
-    conn = connect()
-    src = _source_or_exit(conn, source)
-    run(conn, src["id"])
-
-
 @analyze_app.command("facts")
 def analyze_facts(source: str, all_locales: bool = typer.Option(False, "--all-locales")):
     from .analysis.facts import analyze_facts_regex
@@ -150,13 +141,6 @@ def analyze_faqs(source: str, all_locales: bool = typer.Option(False, "--all-loc
     asyncio.run(run(conn, src["id"], all_locales=all_locales))
 
 
-@analyze_app.command("cannibalization")
-def analyze_cannibalization(source: str):
-    from .analysis.cannibalization import analyze_cannibalization as run
-
-    conn = connect()
-    src = _source_or_exit(conn, source)
-    asyncio.run(run(conn, src["id"]))
 
 
 # ---- inventory ----
@@ -198,15 +182,13 @@ def run_all(
     all_locales: bool = typer.Option(False, "--all-locales"),
     no_llm: bool = typer.Option(False, "--no-llm"),
 ):
-    """Full pipeline for a source with run diffing."""
+    """Full fact-check pipeline for a source with run diffing."""
     from .crawler import crawl_source
-    from .analysis.technical import analyze_technical
     from .analysis.facts import analyze_facts_regex
     from .analysis.inventory import consistency_check, export_claims
     from .analysis.fact_check import fact_check_llm
     from .analysis.features import analyze_features_llm
     from .analysis.faqs import analyze_faqs
-    from .analysis.cannibalization import analyze_cannibalization
     from .report.html_report import generate_html
     from .report.csv_export import export_csv
     from .db import reconcile_fixed, start_run, finish_run, now_iso, CATEGORIES
@@ -218,7 +200,6 @@ def run_all(
     print(f"=== run-all source #{sid} started {run_start} ===")
 
     asyncio.run(crawl_source(conn, sid, only_changed=only_changed, limit=limit, concurrency=concurrency))
-    analyze_technical(conn, sid)
     analyze_facts_regex(conn, sid)
     consistency_check(conn, sid)
     from .analysis.products import analyze_product_claims
@@ -228,7 +209,6 @@ def run_all(
         asyncio.run(fact_check_llm(conn, sid, all_locales=all_locales))
         asyncio.run(analyze_features_llm(conn, sid, all_locales=all_locales))
         asyncio.run(analyze_faqs(conn, sid, all_locales=all_locales))
-        asyncio.run(analyze_cannibalization(conn, sid))
 
     fixed = reconcile_fixed(conn, sid, CATEGORIES, run_start)
     if fixed:

@@ -18,6 +18,58 @@
 </div>
 {% endif %}
 
+{# ---- Advanced filters bar ---- #}
+<div class="filters-bar">
+  <button class="btn" type="button" onclick="openFilterBuilder()">⚙ Advanced filters</button>
+  {% if filter_json %}<button class="btn btn-sm" type="button" onclick="location.href='/results'">Clear filter</button>{% endif %}
+  {% for sf in saved_filters %}
+    <button class="chip" type="button" onclick="location.href='/results?saved={{ sf.id }}'">★ {{ sf.name }}</button>
+  {% endfor %}
+  <span id="filter-count" class="muted small"></span>
+  <a class="btn btn-sm" style="margin-left:auto"
+     href="/results/export.csv{% if filter_json %}?filter={{ filter_json|urlencode }}{% endif %}">⭳ Export CSV</a>
+  <a class="btn btn-sm" href="/reports">📄 Reports</a>
+</div>
+
+<div class="modal-backdrop" id="filter-modal" hidden onclick="if(event.target===this)closeFilterModal()">
+  <div class="modal fb-modal">
+    <h3>Advanced filters</h3>
+    <p class="muted small">Toggle scopes, then build groups (All=AND · Any=OR · None=exclude).</p>
+    <div id="fb-mount"></div>
+    <div class="form-actions" style="flex-wrap:wrap">
+      <span id="fb-count" class="run-preview" style="flex-basis:100%"></span>
+      <button class="btn btn-primary" type="button" onclick="applyFilter()">Apply</button>
+      <button class="btn" type="button" onclick="fbClear()">Clear</button>
+      <input type="text" id="fb-save-name" class="fb-save-name" placeholder="Name this filter" hidden>
+      <button class="btn" type="button" onclick="fbSave()">Save search</button>
+      <button class="btn" type="button" onclick="closeFilterModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+window.FINDINGS_SCOPES = [
+  {key:"internal", label:"Internal", on:true},
+  {key:"external", label:"External", on:false},
+  {key:"positive", label:"Positive ✓", on:false},
+  {key:"issue", label:"Issues ✗", on:true},
+  {key:"unclear", label:"Unclear ?", on:false},
+];
+window.FINDINGS_FIELDS = [
+  {key:"category", label:"Category/Section", type:"enum", options:[{% for c in cats %}"{{ c }}",{% endfor %}]},
+  {key:"severity", label:"Severity", type:"enum", options:["critical","high","medium","low"]},
+  {key:"status", label:"Status", type:"enum", options:["open","fixed","ignored","false_positive","unverifiable"]},
+  {key:"locale", label:"Locale", type:"enum", options:[{% for l in locales %}"{{ l }}",{% endfor %}]},
+  {key:"product", label:"Product", type:"enum", options:[{% for p in products %}"{{ p.name }}",{% endfor %}]},
+  {key:"fact_rule", label:"Fact rule", type:"text"},
+  {key:"source_domain", label:"Source domain (external)", type:"text"},
+  {key:"url_contains", label:"URL contains", type:"text"},
+  {key:"evidence_contains", label:"Evidence contains", type:"text"},
+  {key:"date_detected", label:"Date detected", type:"date"},
+];
+window.FINDINGS_INITIAL = {{ filter_json | safe if filter_json else 'null' }};
+</script>
+
 {% if scope is not defined or scope in ['internal','all'] %}
 <form class="filters" method="get">
   {% if scope is defined %}<input type="hidden" name="scope" value="{{ scope }}" />{% endif %}

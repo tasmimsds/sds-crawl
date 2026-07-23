@@ -113,6 +113,17 @@ CREATE TABLE IF NOT EXISTS products (
     UNIQUE(project_id, name)
 );
 
+-- Saved advanced filters / crawl scopes (per project, per context).
+CREATE TABLE IF NOT EXISTS saved_filters (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER REFERENCES sources(id),
+    context TEXT,                     -- 'findings' | 'crawl'
+    name TEXT,
+    model TEXT,                       -- JSON filter model
+    created_at TEXT,
+    UNIQUE(source_id, context, name)
+);
+
 -- App-wide settings edited in the UI (the single source of truth for model config).
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
@@ -285,9 +296,6 @@ CREATE INDEX IF NOT EXISTS idx_issues_cat ON issues(category);
 """
 
 CATEGORIES = [
-    "status",
-    "crawl",
-    "seo_technical",
     "database_size",
     "positioning",
     "free_claim",
@@ -296,7 +304,6 @@ CATEGORIES = [
     "regulation_count",
     "feature_claim",
     "faq",
-    "cannibalization",
     "other_mismatch",
     "external_mismatch",
 ]
@@ -360,6 +367,10 @@ def connect() -> sqlite3.Connection:
     })
     conn.commit()
     _seed_settings(conn)  # premium model defaults + migrate away any stored :free model
+    # Fact-check-only cleanup: purge legacy SEO/technical/cannibalization findings (idempotent).
+    conn.execute("DELETE FROM issues WHERE category IN "
+                 "('seo_technical','cannibalization','status','crawl')")
+    conn.commit()
     _conn = conn
     return conn
 
@@ -367,7 +378,7 @@ def connect() -> sqlite3.Connection:
 # ---- run scope (analysis + locale) persisted per project ----
 ENGLISH_PRESET = ["us", "uk", "eu", "au", "ca", "nz"]
 # Recommended default: Fact Check only (+ FAQ), English locales — cheapest.
-DEFAULT_RUN_SCOPE = {"fact_check": 1, "technical_seo": 0, "cannibalization": 0, "faq": 1}
+DEFAULT_RUN_SCOPE = {"fact_check": 1, "faq": 1}  # fact-check only tool
 
 
 def project_delete_summary(conn, source_id: int) -> dict:
@@ -496,18 +507,11 @@ def set_run_config(conn, source_id: int, scope: dict, locale: dict) -> None:
 
 
 def scope_label(scope: dict, locale: dict) -> str:
-    """Human label for a run's coverage, e.g. 'English locales · Fact Check only'."""
-    parts = []
-    if scope.get("fact_check") and not (scope.get("technical_seo") or scope.get("cannibalization")):
-        parts.append("Fact Check only")
-    elif scope.get("technical_seo") and scope.get("fact_check"):
-        parts.append("Full check")
-    else:
-        on = [k for k in ("fact_check", "technical_seo", "cannibalization", "faq") if scope.get(k)]
-        parts.append("+".join(on) or "nothing")
+    """Human label for a run's coverage, e.g. 'English locales · Fact Check'."""
     mode = (locale or {}).get("mode", "all")
-    loc = {"all": "All locales", "english": "English locales", "custom": "Custom locales"}.get(mode, "All locales")
-    return f"{loc} · {parts[0]}"
+    loc = {"all": "All locales", "english": "English locales", "custom": "Custom locales",
+           "advanced": "Advanced scope"}.get(mode, "All locales")
+    return f"{loc} · Fact Check"
 
 
 def get_products(conn, project_id: int) -> list[dict]:
@@ -784,17 +788,22 @@ def _seed_settings(conn) -> None:
         pass
 
 
-def reconcile_fixed(conn, source_id: int, categories: list[str], run_start_iso: str) -> int:
-    """Diff mode: open issues in these categories not re-detected this run -> fixed."""
+def reconcile_fixed(conn, source_id: int, categories: list[str], run_start_iso: str,
+                    methods: list[str] | None = None) -> int:
+    """Diff mode: open issues NOT re-detected this run -> fixed.
+
+    `methods` restricts reconciliation to issues produced by the detectors that actually
+    ran this run (by detection_method). This prevents wrongly marking a detector's issues
+    'fixed' when that detector didn't run (e.g. the AI screening pass was skipped/paused)."""
     if not categories:
         return 0
     marks = ",".join("?" for _ in categories)
-    cur = conn.execute(
-        f"""UPDATE issues SET status='fixed'
-            WHERE status='open' AND source_id=? AND detected_at < ?
-              AND category IN ({marks})""",
-        (source_id, run_start_iso, *categories),
-    )
+    where = ["status='open'", "source_id=?", "detected_at < ?", f"category IN ({marks})"]
+    params = [source_id, run_start_iso, *categories]
+    if methods:
+        where.append(f"detection_method IN ({','.join('?' for _ in methods)})")
+        params += methods
+    cur = conn.execute(f"UPDATE issues SET status='fixed' WHERE {' AND '.join(where)}", params)
     conn.commit()
     return cur.rowcount
 

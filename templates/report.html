@@ -93,7 +93,7 @@ document.getElementById("meta").textContent =
   const list=[["URLs",s.urls],["Open",s.open],["Critical",s.by_severity.critical||0],
     ["High",s.by_severity.high||0],["DB size",c.database_size||0],["Positioning",c.positioning||0],
     ["Free claims",c.free_claim||0],["Lang/Region",(c.language_count||0)+(c.region_count||0)],
-    ["Features",c.feature_claim||0],["FAQ",c.faq||0],["Cannibalization",c.cannibalization||0],
+    ["Features",c.feature_claim||0],["FAQ",c.faq||0],
     ["Fixed",s.fixed]];
   $("#cards").innerHTML=list.map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 })();

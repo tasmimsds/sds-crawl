@@ -1,9 +1,19 @@
 # SDS Fact Check — Crawling & Analyzing System
 
-A standalone internal QA tool for **sdsmanager.com**. Its #1 job is **fact-checking**:
-crawl every page, then find **wrong / outdated / inconsistent claims** and show them
-as fixable issues — each with the page URL, the exact quote, and what it should say.
-Technical SEO checks and cannibalization live under a secondary **Site Health** section.
+A standalone **fact-check & inspection tool** for **sdsmanager.com** (and any site you add).
+It does three things, and nothing else:
+
+1. **Crawl** — sitemap auto-discovery from a root domain, with an Advanced Filter Builder to
+   target exactly which URLs to fetch (locale, section, URL patterns, changed-since, date).
+2. **Fact check** — internal (your pages vs your Facts Library) **and** external (what other
+   sites claim about your brand). Every page-vs-fact evaluation is stored as
+   **positive ✓ / issue ✗ / unclear ?**.
+3. **Inspect & manage findings** — advanced filtering, match matrix, and
+   recheck / edit / delete / false-positive learning.
+
+There is **no** SEO, technical-SEO, canonical, cannibalization, or site-health functionality —
+this tool is fact-checking only. (Basic fetch fields like HTTP status are kept internally just
+to know a page is reachable before fact-checking; they are never surfaced as SEO issues.)
 
 It's **web-first** (a browser app anyone can use — no commands) with a CLI for power users.
 Detection & reporting only — it never modifies your live site.
@@ -46,34 +56,35 @@ You'll get every matching page with the exact quote highlighted, and (if you gav
 correct value) a ✓ match / ✗ mismatch verdict. Click **＋ Save as fact rule** to have
 it run automatically on every future sync.
 
-That's it. Findings live under **Results & Issues**; technical problems under
-**Site Health**; exports under **Reports**.
+That's it. Findings live under **Results & Issues**; exports/reports are linked from there.
 
 ---
 
-## What it checks
+## What it checks (facts only)
 
 - **Fact rules** (Facts Library, editable in the UI): database size (17M+), enterprise
   positioning (not "small business"), free-plan claims ("free trial" is fine), and
-  language/region/translation counts (inventory + canonical value).
+  language/region/translation/regulation counts (inventory + canonical value), scoped per
+  **product** (SDS Manager / ExactSDS).
 - **Query fact-search**: type any fact → AI expands it into search terms → full-text
   search → highlighted quotes → optional match/mismatch verdict.
 - **Feature claims** vs your feature list; **FAQ** answers; site-wide **claim inventory**.
-- **Site Health**: 4xx/5xx, redirects, noindex, canonical, missing/duplicate title·meta·H1,
-  thin content, slow pages, and within-locale **cannibalization**.
+- **External fact check**: what other sites say about your brand, scoped to your brand/products.
+- Every page-vs-fact evaluation is stored as **positive ✓ / issue ✗ / unclear ?** (match matrix).
+
+_No SEO, technical-SEO, canonical, cannibalization, or site-health checks — removed by design._
 
 ## Navigation (left sidebar)
 
-Dashboard · Fact Check · Results & Issues · Facts Library · Site Health · Reports ·
-Add Website · Settings. The **website switcher** at the top scopes every page to the
-selected site.
+Dashboard · Fact Check · Results & Issues · Facts Library · Add Website · Settings.
+The **website switcher** at the top scopes every page to the selected site.
 
 ## Synchronize Dashboard
 
-- One card per website: **Synced ✓ / Needs sync / Syncing… / Failed**, page counts,
-  new/changed/errors, last-synced time.
-- **Sync Now** / **Sync Changes Only** / **Cancel** — one click runs crawl → fact
-  rules → technical checks (no manual steps).
+- Per website: a **CRAWL → READ → FACT MATCH** pipeline flow with positive/issue/unclear
+  counts, sync state, page counts, and last-synced time.
+- **Sync Now** / **Sync Changes Only** / **Cancel** — one click runs crawl → read → fact
+  match. The options step lets you pick which URLs to crawl (Advanced Filter Builder).
 - **Auto-sync schedule**: Off / Daily / Weekly per site (runs a full sync automatically).
 - **What changed** + **Recent sync activity** (click a row for run detail + error pages).
 
@@ -84,7 +95,6 @@ selected site.
 .venv/bin/python -m src.cli source add <url|file> --name "My site"
 .venv/bin/python -m src.cli crawl <source>
 .venv/bin/python -m src.cli analyze facts <source>  # regex + inventory + AI
-.venv/bin/python -m src.cli analyze technical <source>
 .venv/bin/python -m src.cli inventory claims <source>
 .venv/bin/python -m src.cli report html <source>
 .venv/bin/python -m src.cli run-all <source>

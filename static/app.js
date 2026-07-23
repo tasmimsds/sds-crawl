@@ -71,37 +71,49 @@ async function openRunOptions(sid, onlyChanged) {
   let info;
   try { info = await (await fetch(`/sites/${sid}/scope-info.json`)).json(); }
   catch (e) { bodyEl.innerHTML = '<p class="note err">Could not load options.</p>'; return; }
-  _runCtx = { sid, onlyChanged, info };
+  _runCtx = { sid, onlyChanged, info, crawlModel: null, crawlFb: null };
   bodyEl.innerHTML = buildRunForm(info);
   bodyEl.querySelectorAll("input").forEach((el) => el.addEventListener("change", recalcScope));
+  bodyEl.querySelectorAll('input[name="locale_mode"]').forEach((r) =>
+    r.addEventListener("change", syncCrawlAdvanced));
+  syncCrawlAdvanced();
   recalcScope();
+}
+function crawlFields(info) {
+  return [
+    { key: "locale", label: "Locale", type: "enum", options: (info.locales || []).map((l) => l.code) },
+    { key: "section", label: "Section/path", type: "enum", options: (info.sections || []).map((s) => s.code) },
+    { key: "url_contains", label: "URL contains", type: "text" },
+    { key: "url_not_contains", label: "URL does NOT contain", type: "text" },
+    { key: "changed", label: "Changed since last sync", type: "enum", options: ["yes", "no"] },
+    { key: "lastmod", label: "Lastmod date", type: "date" },
+  ];
+}
+function syncCrawlAdvanced() {
+  const mount = document.getElementById("crawl-fb-mount");
+  if (!mount || !_runCtx) return;
+  const adv = document.querySelector('input[name="locale_mode"][value="advanced"]:checked');
+  mount.hidden = !adv;
+  if (adv && !_runCtx.crawlFb && window.FilterBuilder) {
+    const saved = _runCtx.info.saved.locale;
+    _runCtx.crawlFb = FilterBuilder.create(mount, {
+      scopes: [], fields: crawlFields(_runCtx.info),
+      model: (saved && saved.mode === "advanced" && saved.filter) ? saved.filter : undefined,
+      onChange: (m) => { _runCtx.crawlModel = m; recalcScope(); },
+    });
+    _runCtx.crawlModel = _runCtx.crawlFb.getModel();
+  }
 }
 function closeRun() { const m = document.getElementById("run-modal"); if (m) m.hidden = true; }
 window.closeRun = closeRun;
 
-function _scopeMode(s) {
-  if (s.fact_check && !s.technical_seo && !s.cannibalization) return "fact";
-  if (s.fact_check && s.technical_seo && s.cannibalization) return "full";
-  return "custom";
-}
 function buildRunForm(info) {
-  const s = info.saved.scope, loc = info.saved.locale, mode = _scopeMode(s);
+  const loc = info.saved.locale;
   const chk = (b) => (b ? "checked" : "");
-  let h = `
-  <div class="run-sec">
-    <div class="run-h">What should this check?</div>
-    <label class="opt ${mode === 'fact' ? 'sel' : ''}"><input type="radio" name="mode" value="fact" ${chk(mode === 'fact')}>
-      <span><b>⭐ Fact Check only</b> <span class="tag-rec">recommended · cheaper</span><br>
-      <span class="muted small">Crawl + read + fact matching (incl. FAQ). Skips all SEO / site-health / cannibalization.</span></span></label>
-    <label class="opt ${mode === 'full' ? 'sel' : ''}"><input type="radio" name="mode" value="full" ${chk(mode === 'full')}>
-      <span><b>Full check</b><br><span class="muted small">Everything: fact checking + technical SEO + cannibalization + FAQ.</span></span></label>
-    <details class="advanced" ${mode === 'custom' ? 'open' : ''}><summary>Customize</summary>
-      <label class="chk"><input type="checkbox" name="fact_check" ${chk(s.fact_check)}> Fact Check</label>
-      <label class="chk"><input type="checkbox" name="faq" ${chk(s.faq)}> FAQ extraction + check <span class="muted small">(part of fact checking)</span></label>
-      <label class="chk"><input type="checkbox" name="technical_seo" ${chk(s.technical_seo)}> Technical SEO</label>
-      <label class="chk"><input type="checkbox" name="cannibalization" ${chk(s.cannibalization)}> Cannibalization</label>
-      <input type="radio" name="mode" value="custom" ${chk(mode === 'custom')} hidden>
-    </details>
+  let h = `<div class="run-sec">
+    <div class="run-h">Fact check crawl</div>
+    <p class="muted small" style="margin:0">Every crawl reads page content and runs fact matching
+      (including FAQ). Choose which URLs to cover below.</p>
   </div>`;
   if (info.has_locale) {
     const lm = loc.mode || "all";
@@ -122,7 +134,11 @@ function buildRunForm(info) {
       const on = lm === "custom" ? sel.has(l.code) : (lm === "all" || (lm === "english" && (info.english.includes(l.code) || l.code === "(root)")));
       h += `<label class="chk"><input type="checkbox" name="locales" value="${l.code}" ${on ? "checked" : ""}> ${l.code} <span class="muted small">${l.count.toLocaleString()} URLs</span></label>`;
     });
-    h += `</div></div>`;
+    h += `</div>
+      <label class="opt ${lm === 'advanced' ? 'sel' : ''}"><input type="radio" name="locale_mode" value="advanced" ${chk(lm === 'advanced')}>
+        <span><b>Advanced</b> <span class="muted small">— precise group query (locale, section, URL patterns…)</span></span></label>
+      <div id="crawl-fb-mount" ${lm === 'advanced' ? '' : 'hidden'}></div>
+      </div>`;
   }
   h += `<div class="run-preview" id="run-preview"></div>
     <div class="form-actions">
@@ -151,11 +167,21 @@ function recalcScope() {
   document.querySelectorAll("#run-modal .opt").forEach((o) => {
     const i = o.querySelector("input"); o.classList.toggle("sel", i && i.checked);
   });
-  const modeR = document.querySelector('input[name="mode"]:checked');
-  let mode = modeR ? modeR.value : "fact";
-  // if a Customize checkbox is toggled, switch to custom
   const preview = document.getElementById("run-preview"); if (!preview) return;
-  const full = mode === "full";
+  const full = false;  // fact-check only — no full/SEO mode
+  // advanced crawl scope -> live count from the backend (URL-selection filter)
+  if (info.has_locale && _selectedLocaleMode() === "advanced") {
+    const m = ctx.crawlModel || { groups: [] };
+    fetch(`/sites/${ctx.sid}/scope-count.json?filter=` + encodeURIComponent(JSON.stringify(m)))
+      .then((r) => r.json()).then((j) => {
+        const rate = full ? info.rate.full : info.rate.fact;
+        const usd = j.selected * rate;
+        const mins = Math.max(1, Math.round(j.selected * info.sec_per_page / info.concurrency / 60));
+        preview.innerHTML = `<b>This crawl will fetch ${j.selected.toLocaleString()} of ${j.total.toLocaleString()} URLs</b>`
+          + ` · ~$${usd.toFixed(2)}, ~${mins} min <span class="muted small">(estimate)</span>`;
+      }).catch(() => {});
+    return;
+  }
   let selUrls, llmPages;
   if (!info.has_locale) { selUrls = info.total; llmPages = info.english_llm_total || info.total; }
   else {
@@ -184,18 +210,14 @@ async function doStartRun() {
   const ctx = _runCtx; if (!ctx) return;
   const body = new URLSearchParams();
   body.set("only_changed", ctx.onlyChanged ? "true" : "false");
-  // mode: full/fact, else custom if a Customize box diverges
-  let mode = (document.querySelector('input[name="mode"]:checked') || {}).value || "fact";
-  const cbs = ["fact_check", "faq", "technical_seo", "cannibalization"];
-  const anyCustomTouched = cbs.some((k) => document.querySelector(`input[name="${k}"]`));
-  // if the user opened Customize and it doesn't match a preset, send custom + toggles
-  body.set("mode", mode);
-  cbs.forEach((k) => { const el = document.querySelector(`input[name="${k}"]`); if (el && el.checked) body.set(k, "1"); });
-  if (mode === "custom" || (anyCustomTouched && mode !== "full" && mode !== "fact")) body.set("mode", "custom");
+  // fact-check only tool — analysis scope is always fact matching; only URL scope varies
   const lm = document.querySelector('input[name="locale_mode"]:checked');
   body.set("locale_mode", lm ? lm.value : "all");
   if (lm && lm.value === "custom") {
     document.querySelectorAll('#locale-grid input[name="locales"]:checked').forEach((c) => body.append("locales", c.value));
+  }
+  if (lm && lm.value === "advanced") {
+    body.set("crawl_filter", JSON.stringify(ctx.crawlModel || { groups: [] }));
   }
   await startRunNow(ctx.sid, ctx.onlyChanged, body);
   closeRun();
@@ -260,6 +282,56 @@ function filterVerdict(btn, v) {
   });
 }
 window.filterVerdict = filterVerdict;
+
+// ---- Results Advanced Filter Builder wiring ----
+let _fbInstance = null, _fbModel = null;
+function openFilterBuilder() {
+  const modal = document.getElementById("filter-modal");
+  if (!modal || !window.FilterBuilder) return;
+  modal.hidden = false;
+  _fbInstance = FilterBuilder.create(document.getElementById("fb-mount"), {
+    scopes: window.FINDINGS_SCOPES, fields: window.FINDINGS_FIELDS,
+    model: window.FINDINGS_INITIAL || undefined,
+    onChange: (m) => { _fbModel = m; fbCount(m); },
+  });
+  _fbModel = _fbInstance.getModel();
+  fbCount(_fbModel);
+}
+function closeFilterModal() { const m = document.getElementById("filter-modal"); if (m) m.hidden = true; }
+async function fbCount(m) {
+  const el = document.getElementById("fb-count");
+  try {
+    const j = await (await fetch("/filters/count.json?filter=" + encodeURIComponent(JSON.stringify(m)))).json();
+    if (el) el.textContent = `Matches: ${j.count} findings` +
+      (j.external ? ` (${j.internal} internal · ${j.external} external)` : "");
+  } catch (e) { /* ignore */ }
+}
+function applyFilter() {
+  location.href = "/results?filter=" + encodeURIComponent(JSON.stringify(_fbModel || {}));
+}
+function fbClear() { if (_fbInstance) _fbInstance.setModel({ scopes: {}, groups: [] }); }
+async function fbSave() {
+  const inp = document.getElementById("fb-save-name");
+  if (!inp) return;
+  if (inp.hidden) { inp.hidden = false; inp.focus(); return; }   // no browser prompt
+  const name = inp.value.trim();
+  if (!name) { inp.focus(); return; }
+  const body = new URLSearchParams({ name, context: "findings", model: JSON.stringify(_fbModel || {}) });
+  const r = await fetch("/filters/save", { method: "POST", body });
+  if (r.ok) { alertBanner(`Saved filter "${name}".`); inp.hidden = true; inp.value = ""; }
+  else { alertBanner("Save failed."); }
+}
+window.openFilterBuilder = openFilterBuilder; window.closeFilterModal = closeFilterModal;
+window.applyFilter = applyFilter; window.fbClear = fbClear; window.fbSave = fbSave;
+// show live match count in the filters bar when a filter is active
+document.addEventListener("DOMContentLoaded", () => {
+  if (window.FINDINGS_INITIAL) {
+    const el = document.getElementById("filter-count");
+    fetch("/filters/count.json?filter=" + encodeURIComponent(JSON.stringify(window.FINDINGS_INITIAL)))
+      .then((r) => r.json()).then((j) => { if (el) el.textContent = `${j.count} findings match`; })
+      .catch(() => {});
+  }
+});
 
 function filterVerdictBtn(v) {
   const btn = document.querySelector(`.vf[onclick*="'${v}'"]`);

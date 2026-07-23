@@ -381,3 +381,33 @@ td.num a{font-weight:700}
 /* danger zone */
 .danger-zone{border-color:#f3c3c6;background:#fef7f7}
 .danger-zone .section-h{color:#b42318}
+
+/* ---- Advanced Filter Builder (reusable: Results + crawl scope) ---- */
+.filters-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.fb-modal{max-width:680px;width:100%;text-align:left}
+.fb{display:flex;flex-direction:column;gap:12px}
+.fb-scopes{display:flex;gap:8px;flex-wrap:wrap}
+.fb-pill{border:1.5px solid var(--border);background:var(--surface);border-radius:999px;
+  padding:6px 14px;font-size:13px;font-weight:600;cursor:pointer;color:var(--fg)}
+.fb-pill.on{border-color:var(--primary);background:var(--primary-soft);color:var(--primary-d)}
+.fb-pill.off{color:var(--muted)}
+.fb-groups{display:flex;flex-direction:column;gap:10px}
+.fb-group{border:1px solid var(--border);border-radius:12px;padding:12px 14px;background:var(--surface)}
+.fb-group-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px}
+.fb-group-top select{border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-size:13px;font-weight:600;background:var(--bg)}
+.fb-trash{margin-left:auto;background:none;border:none;cursor:pointer;font-size:15px;opacity:.6}
+.fb-trash:hover{opacity:1}
+.fb-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:10px 0 6px}
+.fb-chip{display:inline-flex;align-items:center;gap:6px;background:var(--primary-soft);
+  border:1px solid #c7d2fe;color:var(--primary-d);border-radius:8px;padding:4px 10px;font-size:13px;font-weight:600}
+.fb-chip .fb-x{cursor:pointer;font-weight:700;opacity:.7}
+.fb-chip .fb-x:hover{opacity:1}
+.fb-conn{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.04em}
+.fb-chips input[type=text]{border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;min-width:150px}
+.fb-chips input[type=date]{border:1px solid var(--border);border-radius:8px;padding:5px 8px;font-size:13px}
+.fb-add-sel{border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-size:13px;background:var(--bg)}
+.fb-gpreview{font-size:12px;color:var(--muted);font-family:ui-monospace,monospace;
+  background:var(--bg);border-radius:6px;padding:5px 9px;margin-top:4px}
+.fb-preview{background:var(--primary-soft);border-radius:9px;padding:10px 12px;font-size:13px;
+  color:var(--fg);font-family:ui-monospace,monospace;word-break:break-word}
+.fb-save-name{border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:13px}

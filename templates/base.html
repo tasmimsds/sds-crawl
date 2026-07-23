@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}SDS Fact Check{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css?v=14" />
+  <link rel="stylesheet" href="/static/app.css?v=16" />
 </head>
 <body>
 <div class="layout">
@@ -34,11 +34,6 @@
         {% if nav.open_issues %}<b class="badge-count">{{ nav.open_issues }}</b>{% endif %}</a>
       <a href="/facts" class="{{ 'active' if active=='facts' }}"><i>☰</i><span>Facts Library</span></a>
 
-      <div class="grp">Site</div>
-      <a href="/site-health" class="{{ 'active' if active=='health' }}"><i>♥</i><span>Site Health</span>
-        {% if nav.health_errors %}<b class="badge-count warn">{{ nav.health_errors }}</b>{% endif %}</a>
-      <a href="/reports" class="{{ 'active' if active=='reports' }}"><i>⇩</i><span>Reports &amp; Exports</span></a>
-
       <div class="grp">System</div>
       <a href="/add-site" class="{{ 'active' if active=='add' }}"><i>+</i><span>Add Website</span></a>
       <a href="/settings" class="{{ 'active' if active=='settings' }}"><i>⚙</i><span>Settings</span></a>
@@ -57,7 +52,8 @@
     {% endif %}
   </main>
 </div>
-<script src="/static/app.js?v=14"></script>
+<script src="/static/filter-builder.js?v=16"></script>
+<script src="/static/app.js?v=16"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

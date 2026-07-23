@@ -174,7 +174,7 @@ def pipeline_state(conn, source_id: int) -> dict:
         "s2": {"name": "READ", "status": status_for(2), "read": rd["pages_read"],
                "unreadable": rd["pages_unreadable"], "claims": mt["claims_extracted"],
                "faqs": rd["faqs_extracted"]},
-        "s3": {"name": "MATCH", "status": status_for(3), "facts": mt["facts_checked"],
+        "s3": {"name": "FACT MATCH", "status": status_for(3), "facts": mt["facts_checked"],
                "positive": mt["matches_positive"], "issues": mt["matches_issue"],
                "unclear": mt["matches_unclear"]},
         "message": (job["message"] if job else ""),
@@ -183,8 +183,6 @@ def pipeline_state(conn, source_id: int) -> dict:
 
 _FACT_CATS = ("database_size", "positioning", "free_claim", "language_count", "region_count",
               "regulation_count", "feature_claim", "faq", "other_mismatch")
-_TECH_CATS = ("status", "crawl", "seo_technical")
-_CANNIB_CATS = ("cannibalization",)
 
 
 def _resolve_locales(conn, source_id, locale_cfg):
@@ -204,15 +202,13 @@ def _resolve_locales(conn, source_id, locale_cfg):
 
 async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
                        include_external=False, scope=None, locale=None) -> None:
-    """One click = check sitemap, crawl pages, then run the SELECTED analyses.
+    """One click = check sitemap, crawl pages, then FACT MATCH (this is a fact-check-only tool).
 
-    scope: {fact_check, technical_seo, cannibalization, faq} — skipped analyses run
-    NOTHING (no LLM, no compute, no issues). locale: {mode, locales} filters URLs before
-    crawling. Both default to the project's saved config; include_external adds web findings.
+    locale: {mode, locales} filters which URLs to crawl before fetching (defaults to the
+    project's saved config). include_external also refreshes external/web findings.
     """
     from .analysis.facts import analyze_facts_regex
     from .analysis.inventory import consistency_check
-    from .analysis.technical import analyze_technical
     from .db import get_run_config, scope_label, set_run_config
     from .ingest import add_and_ingest
 
@@ -221,7 +217,13 @@ async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
     locale = locale if locale is not None else cfg["locale"]
     set_run_config(conn, source_id, scope, locale)  # persist as this project's default
     label = scope_label(scope, locale)
-    locale_allow = _resolve_locales(conn, source_id, locale)
+    # advanced crawl scope (Filter Builder) vs simple locale preset
+    crawl_filter = None
+    if (locale or {}).get("mode") == "advanced":
+        crawl_filter = (locale or {}).get("filter")
+        locale_allow = None
+    else:
+        locale_allow = _resolve_locales(conn, source_id, locale)
 
     run_start = now_iso()
     src = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
@@ -247,7 +249,7 @@ async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
                        message=f"Checking pages… {done}/{total}")
 
         await crawl_source(conn, source_id, only_changed=only_changed, on_progress=on_progress,
-                           locales=locale_allow)
+                           locales=locale_allow, crawl_filter=crawl_filter)
 
         after_hashes = _latest_hashes(conn, source_id)
         changed = sum(1 for uid, h in after_hashes.items()
@@ -258,41 +260,31 @@ async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
         update_job(conn, job_id, stage="read", message="Reading pages…")
         _update_read_stats(conn, job_id, source_id)
 
-        # Stage 3 — MATCH: only the SELECTED analyses run. Skipped ones do nothing.
+        # Stage 3 — FACT MATCH: crawl content is matched against the fact rules.
+        # (This tool is fact-check only — no SEO/technical/cannibalization analysis.)
         update_job(conn, job_id, stage="facts", message="Matching facts…")
-        reconcile_cats: list[str] = []
+        from .db import clear_matches_for_source
+        await run_in_threadpool(clear_matches_for_source, conn, source_id)
+        await run_in_threadpool(analyze_facts_regex, conn, source_id)
+        await run_in_threadpool(consistency_check, conn, source_id)
+        from .analysis.products import analyze_product_claims
+        await run_in_threadpool(analyze_product_claims, conn, source_id)
+        from .factcheck.scan import run_query_rules
+        await run_query_rules(conn, source_id)
+        reconcile_cats = list(_FACT_CATS)
+        # detectors that ran deterministically (their issues may be reconciled)
+        ran_methods = ["regex", "inventory", "context", "llm"]
 
-        if scope.get("fact_check"):
-            from .db import clear_matches_for_source
-            await run_in_threadpool(clear_matches_for_source, conn, source_id)
-            await run_in_threadpool(analyze_facts_regex, conn, source_id)
-            await run_in_threadpool(consistency_check, conn, source_id)
-            from .analysis.products import analyze_product_claims
-            await run_in_threadpool(analyze_product_claims, conn, source_id)
-            from .factcheck.scan import run_query_rules
-            await run_query_rules(conn, source_id)
-            reconcile_cats += list(_FACT_CATS)
-        else:
-            print("Scope: fact-check SKIPPED (no fact matching this run).")
+        # AI screening pass — the deepest fact check (paraphrase/nuance). Part of a full
+        # fact check; only trust it for reconciliation if it completed (didn't pause on caps).
+        from .analysis.fact_check import fact_check_llm
+        screen = await fact_check_llm(conn, source_id, all_locales=True)
+        if isinstance(screen, dict) and screen.get("completed"):
+            ran_methods.append("ai_screen")
 
-        if scope.get("faq"):
-            from .analysis.faqs import analyze_faqs
-            await analyze_faqs(conn, source_id)
-        else:
-            print("Scope: FAQ check SKIPPED.")
-
-        if scope.get("technical_seo"):
-            await run_in_threadpool(analyze_technical, conn, source_id)
-            reconcile_cats += list(_TECH_CATS)
-        else:
-            print("Scope: technical/SEO SKIPPED (no SEO/site-health analysis, 0 SEO issues).")
-
-        if scope.get("cannibalization"):
-            from .analysis.cannibalization import analyze_cannibalization
-            await analyze_cannibalization(conn, source_id)
-            reconcile_cats += list(_CANNIB_CATS)
-        else:
-            print("Scope: cannibalization SKIPPED (no TF-IDF/similarity compute).")
+        # FAQ extraction + check is part of fact checking (always on)
+        from .analysis.faqs import analyze_faqs
+        await analyze_faqs(conn, source_id)
 
         _update_match_stats(conn, job_id, source_id)
 
@@ -305,9 +297,10 @@ async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
                 await run_external_mentions(conn, source_id)
                 await run_external_for_saved_rules(conn, source_id)
 
-        # Only reconcile the categories we actually re-scanned — a skipped analysis must
-        # NOT mark its (stale) issues fixed.
-        fixed = reconcile_fixed(conn, source_id, reconcile_cats, run_start) if reconcile_cats else 0
+        # Only reconcile issues from detectors that actually ran this run (detector-aware):
+        # never mark AI-screen findings 'fixed' when the screening pass didn't complete.
+        fixed = reconcile_fixed(conn, source_id, reconcile_cats, run_start,
+                                methods=ran_methods) if reconcile_cats else 0
         found = conn.execute(
             "SELECT COUNT(*) c FROM issues WHERE source_id=? AND detected_at>=? AND status='open'",
             (source_id, run_start),

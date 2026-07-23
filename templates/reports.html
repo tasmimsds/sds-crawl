@@ -2,30 +2,46 @@
 {% block title %}Reports & Exports — SDS Fact Check{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Reports &amp; Exports</h1>
-  <p class="muted">Export the findings for the active website.</p></div>
+  <p class="muted">Findings for the active website. CSVs are generated live from the database on
+    each download (UTF-8, Excel-safe) — never stale.</p></div>
 
-<div class="card">
-  <button class="btn btn-primary" onclick="runExport()">Generate report + CSVs</button>
-  <span class="muted small" id="export-msg" style="margin-left:10px"></span>
+<h2 class="section-h">Findings CSVs</h2>
+<div class="card table-card">
+  <table class="tbl">
+    <thead><tr><th>Category</th><th class="num">Open</th><th class="num">All statuses</th><th>Download</th></tr></thead>
+    <tbody>
+    {% for c in cats %}
+      <tr>
+        <td>{{ c.cat|cat_label }}</td>
+        <td class="num">{{ c.open }}</td>
+        <td class="num muted">{{ c.all }}</td>
+        <td>
+          <a class="btn btn-sm" href="/reports/download.csv?category={{ c.cat }}&scope=open">Open</a>
+          <a class="btn btn-sm" href="/reports/download.csv?category={{ c.cat }}&scope=all">All statuses</a>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">No findings yet — run a sync.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="filters-bar" style="margin-top:14px">
+    <a class="btn btn-primary" href="/reports/download.csv?scope=open">⭳ Export all findings (open)</a>
+    <a class="btn" href="/reports/download.csv?scope=all">⭳ Export all matches (all statuses)</a>
+    {% if ext_open %}<a class="btn" href="/reports/download-external.csv?scope=open">⭳ External findings ({{ ext_open }})</a>{% endif %}
+  </div>
 </div>
 
-{% if html_files %}
-<h2 class="section-h">Recent reports</h2>
+<h2 class="section-h">HTML report</h2>
 <div class="card">
-  <ul class="linklist">
+  <button class="btn btn-primary" onclick="runExport()">Generate HTML report</button>
+  <span class="muted small" id="export-msg" style="margin-left:10px"></span>
+  {% if html_files %}
+  <ul class="linklist" style="margin-top:12px">
     {% for f in html_files %}<li><a href="/output/{{ f }}" target="_blank">{{ f }}</a></li>{% endfor %}
   </ul>
+  {% endif %}
 </div>
-{% endif %}
-
-{% if csv_files %}
-<h2 class="section-h">CSV exports</h2>
-<div class="card">
-  <ul class="linklist">
-    {% for f in csv_files %}<li><a href="/output/{{ f }}" download>{{ f }}</a></li>{% endfor %}
-  </ul>
-</div>
-{% endif %}
 
 <script>
 async function runExport(){

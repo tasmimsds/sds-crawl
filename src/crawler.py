@@ -115,17 +115,23 @@ async def _fetch(client, start_url, on_throttle, max_hops, retries, base_delay):
 
 
 async def crawl_source(conn, source_id, *, only_changed=False, limit=None, concurrency=None,
-                       on_progress=None, locales=None):
+                       on_progress=None, locales=None, crawl_filter=None):
     from .db import source_domain
     c = settings()["crawl"]
     # per-project domain gate: crawl THIS project's own domain (not a global default)
     primary = source_domain(conn, source_id) or c["primary_domain"]
     conc = concurrency or c["concurrency"]
 
-    rows = conn.execute(
-        "SELECT id, url, lastmod, last_crawled, locale FROM urls WHERE source_id=? AND in_source=1 ORDER BY id",
-        (source_id,),
-    ).fetchall()
+    # advanced crawl-scope filter compiles to a WHERE on the URL selection (before fetch)
+    sql = "SELECT id, url, lastmod, last_crawled, locale FROM urls u WHERE source_id=? AND in_source=1"
+    sql_params = [source_id]
+    if crawl_filter and crawl_filter.get("groups"):
+        from .filters import CRAWL_FIELDS, compile_model
+        where, fp = compile_model(crawl_filter, CRAWL_FIELDS)
+        if where:
+            sql += f" AND ({where})"
+            sql_params += fp
+    rows = conn.execute(sql + " ORDER BY id", sql_params).fetchall()
     # Only crawl the project's own domain; external alternates are recorded, not fetched.
     # Never crawl excluded hosts (e.g. admin55.sdsmanager.com).
     exclude = c.get("exclude_hosts") or []
