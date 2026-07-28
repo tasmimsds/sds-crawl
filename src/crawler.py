@@ -12,7 +12,7 @@ from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt,
 from .config import settings
 from .db import add_faq, clear_faqs, fts_index_url, now_iso
 from .extractor import extract
-from .util import host_excluded, host_of
+from .util import content_type_of, host_excluded, host_of
 
 _REDIRECT_CODES = {301, 302, 303, 307, 308}
 
@@ -202,7 +202,7 @@ async def crawl_source(conn, source_id, *, only_changed=False, limit=None, concu
                         "status_code": None, "final_url": row["url"], "redirect_chain": [],
                         "response_time_ms": 0, "error": _classify_error(exc), "html": None,
                     }
-                _store(conn, row["id"], outcome)
+                _store(conn, row["id"], outcome, row["url"])
                 if outcome["error"] or (outcome["status_code"] or 0) >= 400:
                     errors["n"] += 1
             finally:
@@ -220,8 +220,82 @@ async def crawl_source(conn, source_id, *, only_changed=False, limit=None, concu
     return done["n"]
 
 
-def _store(conn, url_id, outcome):
-    ex = extract(outcome["html"]) if outcome["html"] else None
+async def backfill_authors(conn, source_id=None, *, limit=None, on_progress=None) -> dict:
+    """Targeted re-fetch of ONLY blog/news URLs to extract authors (raw HTML isn't
+    stored, so a fetch is required). Updates urls.author / author_status in place;
+    does NOT rewrite crawl_results. Uses the same politeness (concurrency, delay,
+    throttle) as a normal crawl. Returns per-type counts and found/not_found tallies."""
+    c = settings()["crawl"]
+    conc = c["concurrency"]
+    sql = ("SELECT id, url FROM urls WHERE in_source=1 AND content_type IN ('blog','news')")
+    params: list = []
+    if source_id is not None:
+        sql += " AND source_id=?"
+        params.append(source_id)
+    sql += " ORDER BY id"
+    rows = conn.execute(sql, params).fetchall()
+    exclude = c.get("exclude_hosts") or []
+    rows = [r for r in rows if not host_excluded(r["url"], exclude)]
+    if limit:
+        rows = rows[:limit]
+    total = len(rows)
+    print(f"Author backfill: re-fetching {total} blog/news URLs (concurrency {conc})...")
+
+    sem = _ResizableSemaphore(conc)
+    throttled = {"on": False}
+    stats = {"blog": 0, "news": 0, "found": 0, "not_found": 0, "errors": 0}
+    done = {"n": 0}
+
+    async def on_throttle():
+        if not throttled["on"]:
+            throttled["on"] = True
+            await sem.set_capacity(c["throttle_concurrency"])
+        await asyncio.sleep(c["throttle_cooldown_s"])
+
+    async with httpx.AsyncClient(
+        http2=c["http2"], follow_redirects=False, timeout=c["request_timeout_s"],
+        headers={"user-agent": c["user_agent"]}, limits=httpx.Limits(max_connections=max(conc, 8)),
+    ) as client:
+
+        async def worker(row):
+            await sem.acquire()
+            try:
+                await asyncio.sleep(c["per_worker_delay_s"])
+                try:
+                    outcome = await _fetch(client, row["url"], on_throttle,
+                                           c["max_redirect_hops"], c["max_retries"],
+                                           c["retry_base_delay_s"])
+                except Exception:  # noqa: BLE001
+                    stats["errors"] += 1
+                    return
+                ct = content_type_of(row["url"])
+                stats[ct] = stats.get(ct, 0) + 1
+                author = None
+                if outcome.get("html"):
+                    ex = extract(outcome["html"], row["url"])
+                    author = ex.author
+                status = "found" if author else "not_found"
+                stats["found" if author else "not_found"] += 1
+                conn.execute("UPDATE urls SET author=?, author_status=?, content_type=? WHERE id=?",
+                             (author, status, ct, row["id"]))
+            finally:
+                await sem.release()
+                done["n"] += 1
+                if on_progress:
+                    on_progress(done["n"], total, stats["errors"])
+                if done["n"] % 50 == 0 or done["n"] == total:
+                    print(f"  {done['n']}/{total} (found {stats['found']}, "
+                          f"not_found {stats['not_found']}, errors {stats['errors']})")
+
+        await asyncio.gather(*(worker(r) for r in rows))
+
+    conn.commit()
+    print(f"Author backfill complete: {stats}")
+    return stats
+
+
+def _store(conn, url_id, outcome, url=None):
+    ex = extract(outcome["html"], url) if outcome["html"] else None
     crawled_at = now_iso()
     conn.execute(
         """INSERT INTO crawl_results
@@ -244,6 +318,14 @@ def _store(conn, url_id, outcome):
         ),
     )
     conn.execute("UPDATE urls SET last_crawled=? WHERE id=?", (crawled_at, url_id))
+    # page-level content type + author (blog/news only) — available to every finding on the page
+    ctype = content_type_of(url) if url else "other"
+    conn.execute(
+        "UPDATE urls SET content_type=?, author=?, author_status=? WHERE id=?",
+        (ctype, ex.author if ex else None,
+         ex.author_status if ex else ("not_applicable" if ctype == "other" else "not_found"),
+         url_id),
+    )
     if ex:
         clear_faqs(conn, url_id)
         for faq in ex.faqs:

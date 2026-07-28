@@ -1,6 +1,7 @@
 """Self-contained jinja2 HTML dashboard with claim inventory + hreflang grouping."""
 from __future__ import annotations
 
+import base64
 import json
 from datetime import datetime, timezone
 
@@ -8,6 +9,16 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..config import PROJECT_ROOT, resolve_path, settings
 from ..analysis.inventory import collect_inventory
+
+
+def _logo_data_uri() -> str:
+    """Embed the full ExactFact Checker logo (PNG) so the report is self-contained
+    even when opened straight from disk (no /static server)."""
+    p = PROJECT_ROOT / "static" / "img" / "logo-full.png"
+    try:
+        return "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode("ascii")
+    except OSError:
+        return ""
 
 
 def _summary(conn, source_id):
@@ -33,8 +44,9 @@ def _summary(conn, source_id):
 
 def _issues(conn, source_id):
     rows = conn.execute(
-        """SELECT i.id, u.url, u.locale, u.hreflang_group_id AS hg, i.category, i.severity,
-                  i.title, i.detail, i.evidence, i.expected, ru.url AS related_url,
+        """SELECT i.id, u.url, u.locale, u.content_type, u.author, u.hreflang_group_id AS hg,
+                  i.category, i.severity,
+                  i.title, i.detail, i.evidence, i.matched_value, i.expected, ru.url AS related_url,
                   i.detection_method, i.status, i.detected_at
            FROM issues i JOIN urls u ON u.id=i.url_id
            LEFT JOIN urls ru ON ru.id=i.related_url_id
@@ -89,7 +101,7 @@ def generate_html(conn, source_id: int):
     tmpl = env.get_template("report.html")
     # Safe to embed in a <script>: neutralise any "</script>" / "<!--" breakout.
     safe_json = json.dumps(payload).replace("</", "<\\/")
-    html = tmpl.render(payload_json=safe_json)
+    html = tmpl.render(payload_json=safe_json, logo_data_uri=_logo_data_uri())
 
     out_dir = resolve_path(settings()["paths"]["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)

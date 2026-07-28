@@ -3,13 +3,25 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{% block title %}SDS Fact Check{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css?v=16" />
+  <title>{% block title %}ExactFact Checker{% endblock %}</title>
+  <link rel="icon" href="/static/img/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/img/apple-touch-icon.png" />
+  <link rel="manifest" href="/static/site.webmanifest" />
+  <meta name="apple-mobile-web-app-title" content="ExactFact Checker" />
+  <meta name="theme-color" content="#626DF9" />
+  <link rel="stylesheet" href="/static/app.css?v=20" />
 </head>
 <body>
 <div class="layout">
   <aside class="sidebar">
-    <a class="brand" href="/">🛡️ <span class="brand-txt">SDS Fact Check</span></a>
+    <a class="brand" href="/" title="ExactFact Checker by SDS Manager">
+      <img class="brand-icon" src="/static/img/SDS_Manager_icon.png" alt="ExactFact Checker" />
+      <span class="brand-txt brand-lockup">
+        <span class="name">ExactFact Checker</span>
+        <span class="by">by SDS Manager</span>
+      </span>
+    </a>
 
     <div class="site-switch">
       {% if nav.sources %}
@@ -45,15 +57,16 @@
       {% block content %}{% endblock %}
     {% else %}
       <div class="center-card"><div class="card empty">
-        <h2>Add your website to start fact-checking</h2>
+        <h2>Add your first website to start fact-checking with ExactFact Checker</h2>
         <p class="muted">Once you add a website, every page here works on it.</p>
         <a href="/add-site" class="btn btn-primary">+ Add Website</a>
       </div></div>
     {% endif %}
+    <footer class="app-footer muted small">ExactFact Checker <span>by SDS Manager</span></footer>
   </main>
 </div>
-<script src="/static/filter-builder.js?v=16"></script>
-<script src="/static/app.js?v=16"></script>
+<script src="/static/filter-builder.js?v=20"></script>
+<script src="/static/app.js?v=20"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

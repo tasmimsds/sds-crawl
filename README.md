@@ -1,6 +1,7 @@
-# SDS Fact Check — Crawling & Analyzing System
+# ExactFact Checker — by SDS Manager
 
-A standalone **fact-check & inspection tool** for **sdsmanager.com** (and any site you add).
+**ExactFact Checker** is a standalone **fact-check & inspection tool** for **sdsmanager.com**
+(and any site you add).
 It does three things, and nothing else:
 
 1. **Crawl** — sitemap auto-discovery from a root domain, with an Advanced Filter Builder to

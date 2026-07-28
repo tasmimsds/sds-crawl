@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ..config import settings
 from ..db import record_issue
-from ..util import sha256
+from ..util import sentence_evidence, sha256
 from ._common import facts_context, features_context, gather_limited
 from .llm import LlmClient
 
@@ -83,8 +83,10 @@ async def analyze_faqs(conn, source_id: int, *, all_locales: bool = False):
                     title=f"faq:{item.get('underlying_category','other_mismatch')}:"
                           f"{(item.get('question') or item['quote'])[:32]}",
                     detail=f"[{item.get('underlying_category')}] {item.get('explanation','')}",
-                    evidence=item["quote"], expected=item.get("expected"),
-                    detection_method="llm",
+                    evidence=sentence_evidence(answers_text, answers_text.find(item["quote"]),
+                                               answers_text.find(item["quote"]) + len(item["quote"])),
+                    expected=item.get("expected"), detection_method="llm",
+                    matched_value=item["quote"],
                 )
                 stats["issues"] += 1
         return run

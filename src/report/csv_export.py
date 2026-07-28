@@ -14,8 +14,8 @@ from ..config import resolve_path, settings
 from ..db import CATEGORIES
 
 # consistent columns for every issue CSV
-COLS = ["url", "locale", "product", "category", "severity", "status", "fact_rule",
-        "evidence", "expected", "detection_method", "detected_at"]
+COLS = ["url", "locale", "content_type", "author", "product", "category", "severity", "status",
+        "fact_rule", "evidence", "matched_value", "expected", "detection_method", "detected_at"]
 _BOM = "﻿"  # so Excel opens Japanese/Hindi/Greek/German evidence without mojibake
 
 
@@ -28,8 +28,9 @@ def _issue_rows(conn, source_id, category=None, scope="open"):
     if scope == "open":
         where.append("i.status='open'")
     return conn.execute(
-        f"""SELECT u.url, u.locale, pp.name AS product, i.category, i.severity, i.status,
-                  i.title AS fact_rule, i.evidence, i.expected, i.detection_method, i.detected_at
+        f"""SELECT u.url, u.locale, u.content_type, u.author, pp.name AS product, i.category,
+                  i.severity, i.status, i.title AS fact_rule, i.evidence, i.matched_value,
+                  i.expected, i.detection_method, i.detected_at
            FROM issues i JOIN urls u ON u.id=i.url_id
            LEFT JOIN products pp ON pp.id=i.product_id
            WHERE {' AND '.join(where)}
@@ -46,13 +47,19 @@ def build_issue_csv(conn, source_id: int, category: str | None = None, scope: st
     w.writerow([f"# scope={scope}  category={category or 'all'}  (generated live from DB)"])
     w.writerow(COLS)
     for r in _issue_rows(conn, source_id, category, scope):
-        w.writerow([r["url"], r["locale"] or "", r["product"] or "", r["category"], r["severity"],
-                    r["status"], r["fact_rule"] or "", r["evidence"] or "", r["expected"] or "",
-                    r["detection_method"] or "", r["detected_at"] or ""])
+        w.writerow([r["url"], r["locale"] or "", r["content_type"] or "", r["author"] or "",
+                    r["product"] or "", r["category"], r["severity"], r["status"],
+                    r["fact_rule"] or "", r["evidence"] or "", r["matched_value"] or "",
+                    r["expected"] or "", r["detection_method"] or "", r["detected_at"] or ""])
     return _BOM + buf.getvalue()
 
 
-def build_external_csv(conn, source_id: int, scope: str = "open") -> str:
+EXT_COLS = ["domain", "external_url", "finding_type", "severity", "status", "evidence",
+            "expected", "reason", "found_at"]
+
+
+def external_rows(conn, source_id, scope="open"):
+    """Shared external-findings rows (dicts keyed by EXT_COLS) — used by CSV and XLSX."""
     where = ["source_id=?", "kind='factcheck'", "deleted_at IS NULL"]
     params = [source_id]
     if scope == "open":
@@ -60,14 +67,58 @@ def build_external_csv(conn, source_id: int, scope: str = "open") -> str:
     rows = conn.execute(
         f"""SELECT domain, external_url, finding_type, severity, status, snippet, expected, reason, created_at
             FROM external_findings WHERE {' AND '.join(where)} ORDER BY domain""", params).fetchall()
+    return [{"domain": r["domain"] or "", "external_url": r["external_url"],
+             "finding_type": r["finding_type"] or "", "severity": r["severity"] or "",
+             "status": r["status"], "evidence": r["snippet"] or "", "expected": r["expected"] or "",
+             "reason": r["reason"] or "", "found_at": r["created_at"] or ""} for r in rows]
+
+
+def build_external_csv(conn, source_id: int, scope: str = "open") -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([f"# external findings  scope={scope}  (generated live from DB)"])
-    w.writerow(["domain", "external_url", "finding_type", "severity", "status", "evidence",
-                "expected", "reason", "found_at"])
-    for r in rows:
-        w.writerow([r["domain"] or "", r["external_url"], r["finding_type"] or "", r["severity"] or "",
-                    r["status"], r["snippet"] or "", r["expected"] or "", r["reason"] or "", r["created_at"] or ""])
+    w.writerow(EXT_COLS)
+    for r in external_rows(conn, source_id, scope):
+        w.writerow([r[c] for c in EXT_COLS])
+    return _BOM + buf.getvalue()
+
+
+URL_COLS = ["url", "locale", "content_type", "author", "product", "issue_count", "categories",
+            "severities", "evidences"]
+
+
+def url_summary_rows(conn, source_id, scope="open"):
+    """One row per URL, aggregating its distinct findings (nothing discarded).
+    issue_count/categories/evidences summarise all findings on that page."""
+    from collections import OrderedDict
+    agg: "OrderedDict" = OrderedDict()
+    for r in _issue_rows(conn, source_id, None, scope):
+        a = agg.setdefault(r["url"], {"url": r["url"], "locale": r["locale"] or "",
+                                      "content_type": r["content_type"] or "", "author": r["author"] or "",
+                                      "product": r["product"] or "", "cats": [], "sevs": set(), "evs": []})
+        a["cats"].append(r["category"])
+        a["sevs"].add(r["severity"])
+        if r["evidence"]:
+            a["evs"].append(r["evidence"])
+    order = ["critical", "high", "medium", "low"]
+    out = []
+    for a in agg.values():
+        top = next((s for s in order if s in a["sevs"]), "")
+        out.append({"url": a["url"], "locale": a["locale"], "content_type": a["content_type"],
+                    "author": a["author"], "product": a["product"],
+                    "issue_count": len(a["cats"]), "categories": "; ".join(sorted(set(a["cats"]))),
+                    "severities": top, "evidences": " | ".join(e[:120] for e in a["evs"][:10])})
+    out.sort(key=lambda x: -x["issue_count"])
+    return out
+
+
+def build_url_summary_csv(conn, source_id: int, scope: str = "open") -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([f"# one row per URL (aggregated)  scope={scope}  (generated live from DB)"])
+    w.writerow(URL_COLS)
+    for r in url_summary_rows(conn, source_id, scope):
+        w.writerow([r[c] for c in URL_COLS])
     return _BOM + buf.getvalue()
 
 
@@ -77,13 +128,15 @@ def build_rows_csv(rows, ext_rows) -> str:
     w = csv.writer(buf)
     w.writerow(["scope", *COLS])
     for r in rows:
-        w.writerow(["internal", r["url"], r.get("locale") or "", r.get("product_name") or "",
+        w.writerow(["internal", r["url"], r.get("locale") or "", r.get("content_type") or "",
+                    r.get("author") or "", r.get("product_name") or "",
                     r["category"], r["severity"], r["status"], r.get("title") or "",
-                    r.get("evidence") or "", r.get("expected") or "", r.get("detection_method") or "",
-                    r.get("last_checked_at") or ""])
+                    r.get("evidence") or "", r.get("matched_value") or "", r.get("expected") or "",
+                    r.get("detection_method") or "", r.get("last_checked_at") or ""])
     for r in ext_rows:
-        w.writerow(["external", r["external_url"], "", "", r.get("finding_type") or "", r["severity"],
-                    r["status"], "", r.get("snippet") or "", r.get("expected") or "", "", ""])
+        w.writerow(["external", r["external_url"], "", "", "", "", r.get("finding_type") or "",
+                    r["severity"], r["status"], "", r.get("snippet") or "", "",
+                    r.get("expected") or "", "", ""])
     return _BOM + buf.getvalue()
 
 

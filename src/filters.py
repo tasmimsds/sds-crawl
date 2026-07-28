@@ -26,6 +26,8 @@ FINDINGS_FIELDS = {
     "severity": ("i.severity", "enum"),
     "status": ("i.status", "enum"),
     "locale": ("u.locale", "enum"),
+    "content_type": ("u.content_type", "enum"),
+    "author": ("u.author", "contains"),
     "product": ("i.product_id", "product"),
     "fact_rule": ("i.title", "contains"),
     "url_contains": ("u.url", "contains"),
@@ -44,6 +46,7 @@ EXTERNAL_FIELDS = {
 CRAWL_FIELDS = {
     "locale": ("u.locale", "enum"),
     "section": ("u.section", "enum"),
+    "content_type": ("u.content_type", "enum"),
     "url_contains": ("u.url", "contains"),
     "url_not_contains": ("u.url", "not_contains"),
     "lastmod": ("u.lastmod", "date"),

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from ..db import record_issue
 from ..rules import load_features
-from ..util import context_around
+from ..util import sentence_evidence
 from ._common import english_pages, features_context, gather_limited
 from .llm import LlmClient
 
@@ -56,8 +56,10 @@ async def analyze_features_llm(conn, source_id: int, *, all_locales: bool = Fals
                 record_issue(
                     conn, source_id=source_id, url_id=page["url_id"], category="feature_claim",
                     severity=severity, title=f"feature:{fid}:{problem}",
-                    detail=c.get("explanation"), evidence=quote,
+                    detail=c.get("explanation"),
+                    evidence=sentence_evidence(page["body_text"], idx, idx + len(quote)),
                     expected=f"feature '{fid}' status per features.yaml", detection_method="llm",
+                    matched_value=quote,
                 )
                 stats["issues"] += 1
         return run

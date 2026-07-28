@@ -119,6 +119,22 @@ def _comma(n):
         return n
 
 
+def _highlight_match(evidence, matched):
+    """Escape the trimmed evidence and wrap the matched phrase in <mark> so the
+    exact fact stands out. Safe: everything is HTML-escaped first; only our own
+    <mark> tags are markup."""
+    import html
+    import re as _re
+    from markupsafe import Markup
+
+    text = html.escape(str(evidence or ""))
+    m = str(matched or "").strip()
+    if m:
+        em = html.escape(m)
+        text = _re.sub(_re.escape(em), lambda x: f"<mark>{x.group(0)}</mark>", text, count=1)
+    return Markup(text)
+
+
 templates.env.globals["reltime"] = _reltime
 templates.env.globals["fmt_dur"] = _fmt_dur
 templates.env.filters["fromjson"] = _fromjson
@@ -126,6 +142,7 @@ templates.env.filters["cat_label"] = _cat_label
 templates.env.filters["short_url"] = _short_url
 templates.env.filters["pretty_title"] = _pretty_title
 templates.env.filters["comma"] = _comma
+templates.env.filters["highlight_match"] = _highlight_match
 
 FACT_CATS = ("database_size", "positioning", "free_claim", "language_count",
              "region_count", "regulation_count", "feature_claim", "faq", "other_mismatch")
@@ -599,9 +616,9 @@ def _issue_rows(conn, sid, cats, request):
     if prod and prod.isdigit():
         where.append("i.product_id=?")
         params.append(int(prod))
-    sql = (f"""SELECT i.id,u.url,u.locale,i.category,i.severity,i.title,i.detail,i.evidence,
-                   i.expected,i.detection_method,i.status,i.note,i.edited,i.last_checked_at,
-                   i.product_id, p.name AS product_name,
+    sql = (f"""SELECT i.id,u.url,u.locale,u.content_type,u.author,i.category,i.severity,i.title,
+                   i.detail,i.evidence,i.matched_value,i.expected,i.detection_method,i.status,
+                   i.note,i.edited, i.last_checked_at, i.product_id, p.name AS product_name,
                    ru.url AS related_url
                FROM issues i JOIN urls u ON u.id=i.url_id
                LEFT JOIN urls ru ON ru.id=i.related_url_id
@@ -632,9 +649,10 @@ def _findings_from_model(conn, sid, model, limit=500):
         if where:
             base.append(f"({where})"); p += pr
         rows = [dict(r) for r in conn.execute(
-            f"""SELECT i.id,u.url,u.locale,i.category,i.severity,i.title,i.detail,i.evidence,
-                   i.expected,i.detection_method,i.status,i.note,i.edited,i.last_checked_at,
-                   i.product_id, pp.name AS product_name, ru.url AS related_url
+            f"""SELECT i.id,u.url,u.locale,u.content_type,u.author,i.category,i.severity,i.title,
+                   i.detail,i.evidence,i.matched_value,i.expected,i.detection_method,i.status,
+                   i.note,i.edited, i.last_checked_at, i.product_id, pp.name AS product_name,
+                   ru.url AS related_url
                FROM issues i JOIN urls u ON u.id=i.url_id
                LEFT JOIN urls ru ON ru.id=i.related_url_id
                LEFT JOIN products pp ON pp.id=i.product_id
@@ -714,6 +732,19 @@ def results_export_csv(request: Request):
         model = {"scopes": {"internal": True}}
     rows, ext_rows = _findings_from_model(conn, active_src["id"], model, limit=100000) if active_src else ([], [])
     return _csv_response(build_rows_csv(rows, ext_rows), "findings_filtered.csv")
+
+
+@app.get("/results/export.xlsx")
+def results_export_xlsx(request: Request):
+    """Excel of the current filtered findings view — same rows as the CSV export."""
+    from .report.xlsx_export import build_rows_xlsx
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    model = _parse_filter_param(conn, request)
+    if model is None:
+        model = {"scopes": {"internal": True}}
+    rows, ext_rows = _findings_from_model(conn, active_src["id"], model, limit=100000) if active_src else ([], [])
+    return _xlsx_response(build_rows_xlsx(rows, ext_rows), "findings_filtered.xlsx")
 
 
 @app.get("/filters/count.json")
@@ -933,6 +964,15 @@ def _csv_response(text: str, filename: str):
                     headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _xlsx_response(data: bytes, filename: str):
+    from fastapi.responses import Response
+    return Response(data, media_type=_XLSX_MIME,
+                    headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
 @app.get("/reports", response_class=HTMLResponse)
 def reports_page(request: Request):
     conn = _conn()
@@ -959,14 +999,18 @@ def reports_page(request: Request):
 
 
 @app.get("/reports/download.csv")
-def reports_download_csv(request: Request, category: str = "", scope: str = "open"):
-    """Live-generated CSV (UTF-8 BOM), regenerated from the DB on every download."""
-    from .report.csv_export import build_issue_csv
+def reports_download_csv(request: Request, category: str = "", scope: str = "open", view: str = ""):
+    """Live-generated CSV (UTF-8 BOM), regenerated from the DB on every download.
+    view='by_url' aggregates one row per URL; default is one row per distinct finding."""
+    from .report.csv_export import build_issue_csv, build_url_summary_csv
     conn = _conn()
     active_src, _ = _active_source(request, conn)
     if not active_src:
         return JSONResponse({"error": "no site"}, status_code=400)
     scope = "all" if scope == "all" else "open"
+    if view == "by_url":
+        return _csv_response(build_url_summary_csv(conn, active_src["id"], scope),
+                             f"findings_by_url_{scope}.csv")
     cat = category or None
     text = build_issue_csv(conn, active_src["id"], cat, scope)
     fname = (f"issues_{cat}_{scope}.csv" if cat else f"findings_all_{scope}.csv")
@@ -982,6 +1026,48 @@ def reports_download_external(request: Request, scope: str = "open"):
         return JSONResponse({"error": "no site"}, status_code=400)
     scope = "all" if scope == "all" else "open"
     return _csv_response(build_external_csv(conn, active_src["id"], scope), f"external_findings_{scope}.csv")
+
+
+@app.get("/reports/download.xlsx")
+def reports_download_xlsx(request: Request, category: str = "", scope: str = "open", view: str = ""):
+    """Live .xlsx (same rows as the CSV) — styled header/autofilter/colours/hyperlinks."""
+    from .report.xlsx_export import build_issue_xlsx, build_url_summary_xlsx
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return JSONResponse({"error": "no site"}, status_code=400)
+    scope = "all" if scope == "all" else "open"
+    if view == "by_url":
+        return _xlsx_response(build_url_summary_xlsx(conn, active_src["id"], scope),
+                              f"findings_by_url_{scope}.xlsx")
+    cat = category or None
+    data = build_issue_xlsx(conn, active_src["id"], cat, scope)
+    fname = (f"issues_{cat}_{scope}.xlsx" if cat else f"findings_all_{scope}.xlsx")
+    return _xlsx_response(data, fname)
+
+
+@app.get("/reports/download-external.xlsx")
+def reports_download_external_xlsx(request: Request, scope: str = "open"):
+    from .report.xlsx_export import build_external_xlsx
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return JSONResponse({"error": "no site"}, status_code=400)
+    scope = "all" if scope == "all" else "open"
+    return _xlsx_response(build_external_xlsx(conn, active_src["id"], scope), f"external_findings_{scope}.xlsx")
+
+
+@app.get("/reports/full.xlsx")
+def reports_full_xlsx(request: Request, scope: str = "open"):
+    """Single multi-sheet workbook: Summary tab + one sheet per category."""
+    from .report.xlsx_export import build_full_report_xlsx
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return JSONResponse({"error": "no site"}, status_code=400)
+    scope = "all" if scope == "all" else "open"
+    return _xlsx_response(build_full_report_xlsx(conn, active_src["id"], scope),
+                          f"full_report_{scope}.xlsx")
 
 
 @app.post("/reports/export")
@@ -1357,6 +1443,35 @@ def issue_mark(issue_id: int, status: str = Form(...)):
     conn.execute("UPDATE issues SET status=? WHERE id=?", (status, issue_id))
     conn.commit()
     return JSONResponse({"ok": True, "status": status})
+
+
+@app.get("/issues/{issue_id}/context")
+def issue_context(issue_id: int):
+    """On-demand full paragraph around the fact, pulled from the STORED page body
+    (no re-crawl). Locates the matched phrase (else the trimmed evidence) in the
+    latest crawl_results.body_text and returns a wide window."""
+    from .util import context_around
+    conn = _conn()
+    row = conn.execute(
+        """SELECT i.url_id, i.matched_value, i.evidence, c.body_text
+             FROM issues i
+             JOIN crawl_results c ON c.id = (
+               SELECT id FROM crawl_results WHERE url_id=i.url_id ORDER BY id DESC LIMIT 1)
+            WHERE i.id=?""", (issue_id,)).fetchone()
+    if not row or not row["body_text"]:
+        return JSONResponse({"context": None, "error": "no stored page body"}, status_code=404)
+    body = row["body_text"]
+    needle = (row["matched_value"] or "").strip()
+    idx = body.find(needle) if needle else -1
+    if idx < 0:  # fall back to the trimmed evidence's core phrase
+        core = (row["evidence"] or "").strip("…").strip()
+        probe = core[:60]
+        idx = body.find(probe) if probe else -1
+        needle = probe if idx >= 0 else ""
+    if idx < 0:
+        return JSONResponse({"context": row["evidence"], "matched": needle or None})
+    ctx = context_around(body, idx, len(needle) or 1, radius=400)
+    return JSONResponse({"context": ctx, "matched": needle or None})
 
 
 @app.post("/issues/{issue_id}/recheck")

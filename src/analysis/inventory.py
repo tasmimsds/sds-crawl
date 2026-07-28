@@ -12,7 +12,7 @@ import re
 from ..config import resolve_path, settings
 from ..rules import load_rules
 from ..db import record_issue, record_match, rule_pk
-from ..util import context_around, normalize_text
+from ..util import sentence_evidence
 
 # generic numeric claims for the inventory CSV
 _GENERIC = {
@@ -24,9 +24,10 @@ _GENERIC = {
 
 
 def _claim_quote(body: str, m) -> str:
-    """Evidence anchored on the matched claim: the match itself + a little
-    trailing context, so the number+unit leads the quote (not buried)."""
-    return normalize_text(body[m.start(): m.end() + 45])
+    """Evidence = the specific sentence containing the matched claim (max ~2
+    sentences, capped), always containing the matched phrase — never a whole
+    paragraph."""
+    return sentence_evidence(body, m.start(), m.end())
 
 
 def _latest_bodies(conn, source_id):
@@ -116,7 +117,7 @@ def consistency_check(conn, source_id: int) -> int:
                     title=f"{kind}:inconsistent",
                     detail=f"{data['label']}: page claims '{val}' but canonical is '{canonical}'.",
                     evidence=quote, expected=canonical, detection_method="inventory",
-                    product_id=prod,
+                    product_id=prod, matched_value=str(val),
                 )
                 record_match(conn, fact_rule_id=pk, url_id=url_id, verdict="issue",
                              evidence=quote, matched_value=str(val), product_id=prod)
