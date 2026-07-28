@@ -3,6 +3,7 @@ LLM verdict on ambiguous only -> results + write mismatches to issues."""
 from __future__ import annotations
 
 from ..db import record_issue
+from ..util import trim_evidence
 from .query import _MARK, save_query, search, verdict
 
 
@@ -70,9 +71,9 @@ async def run_fact(conn, source_id: int, fact: dict) -> dict:
             conn, source_id=source_id, url_id=r["url_id"], category=category, severity=severity,
             title=f"fact:{(fact.get('fact_name') or 'fact')[:48]}",
             detail=r.get("verdict_reason") or f"Contradicts expected value: {correct}",
-            evidence=_MARK.sub("", r["snippet"]), expected=correct or None,
-            detection_method=r.get("how", "llm"),
-            product_id=fact.get("product_id"),
+            evidence=trim_evidence(_MARK.sub("", r["snippet"]), matched=correct),
+            expected=correct or None, detection_method=r.get("how", "llm"),
+            product_id=fact.get("product_id"), matched_value=correct or None,
         )
         title = f"fact:{(fact.get('fact_name') or 'fact')[:48]}"
         conn.execute("UPDATE issues SET query_id=? WHERE source_id=? AND url_id=? AND title=?",

@@ -11,6 +11,26 @@ _WS = re.compile(r"\s+")
 _LOCALE_RE = re.compile(r"^[a-z]{2}$")
 
 
+def content_type_of(url: str) -> str:
+    """Classify a page from its URL path (region-agnostic): the region segment
+    (/us/, /uk/, /au/, …) is NOT part of the test — the type marker is matched
+    anywhere in the path.
+      contains '/sds-management-articles/' -> 'blog'
+      contains '/chemical-hse-news/'       -> 'news'
+      everything else                      -> 'other'
+    Only blog/news pages carry an author; 'other' pages never do."""
+    try:
+        path = urlparse(url).path or ""
+    except ValueError:
+        return "other"
+    segs = [s for s in path.split("/") if s]
+    if "sds-management-articles" in segs:
+        return "blog"
+    if "chemical-hse-news" in segs:
+        return "news"
+    return "other"
+
+
 def parse_locale_section(url: str) -> tuple[str | None, str | None]:
     """Locale = path segment 1 IFF it is a 2-letter code; else no locale.
 
@@ -90,6 +110,109 @@ def context_around(text: str, index: int, length: int, radius: int = 150) -> str
     if end < len(text):
         snippet = re.sub(r"\s\S*$", "", snippet) + "…"
     return normalize_text(snippet)
+
+
+# ── Sentence-level evidence extraction ──────────────────────────────────────
+# Goal: evidence = the SPECIFIC sentence containing the fact (max ~2 sentences,
+# hard cap ~300 chars), always containing the matched phrase — never a whole
+# paragraph. Handles decimals ("17.5 million"), abbreviations, list items, and
+# non-Latin scripts (Japanese 。！？, Hindi danda ।).
+_MAX_EVIDENCE = 300
+# A boundary is: a run of Latin enders .!?… FOLLOWED by whitespace/end (so a
+# decimal like 17.5 — ender followed by a digit — is never a boundary), OR a
+# CJK/Devanagari ender which terminates on its own (never used inside numbers).
+_BOUNDARY = re.compile(r"[.!?…]+(?=\s|$)|[。！？।]+")
+
+
+def _boundaries(text: str) -> list[int]:
+    """Offsets just AFTER each sentence-ending punctuation run."""
+    ends: list[int] = []
+    for m in _BOUNDARY.finditer(text):
+        i = m.start()
+        # "17. 5" style: ender is a bare '.' with a digit right before and the
+        # next non-space char a digit -> treat as decimal, not a boundary.
+        if text[i] == "." and i > 0 and text[i - 1].isdigit():
+            tail = text[m.end():m.end() + 3].lstrip()
+            if tail[:1].isdigit():
+                continue
+        ends.append(m.end())
+    return ends
+
+
+def _window(text: str, start: int, end: int, radius: int) -> str:
+    """Fallback: ±radius chars around the match, trimmed to word boundaries."""
+    n = len(text)
+    w0 = max(0, start - radius)
+    w1 = min(n, end + radius)
+    s = text[w0:w1]
+    if w0 > 0:
+        s = re.sub(r"^\S*\s", "", s)
+    if w1 < n:
+        s = re.sub(r"\s\S*$", "", s)
+    pre = "…" if w0 > 0 else ""
+    post = "…" if w1 < n else ""
+    return normalize_text(pre + s + post)
+
+
+def sentence_evidence(text: str, start: int, end: int, max_chars: int = _MAX_EVIDENCE) -> str:
+    """The sentence(s) of `text` spanning [start, end) — the match's own
+    sentence, plus one neighbour only if the match sentence is very short.
+    Always contains text[start:end]. Caps at max_chars, falling back to a
+    ±120-char word-boundary window if a single sentence is still too long."""
+    text = text or ""
+    n = len(text)
+    if n == 0:
+        return ""
+    start = max(0, min(start, n))
+    end = max(start, min(end, n))
+    ends = _boundaries(text)
+    lo = 0
+    for e in ends:
+        if e <= start:
+            lo = e
+        else:
+            break
+    hi = n
+    for e in ends:
+        if e >= end:
+            hi = e
+            break
+    sent = text[lo:hi].strip()
+    matched = text[start:end]
+    if matched and matched not in sent:  # safety: never drop the fact
+        return _window(text, start, end, 120)
+    # very short match sentence (e.g. a heading / list item) -> add one neighbour
+    if len(sent) < 40 and hi < n:
+        nxt = n
+        for e in ends:
+            if e > hi:
+                nxt = e
+                break
+        cand = text[lo:nxt].strip()
+        if len(cand) <= max_chars:
+            sent = cand
+    if len(sent) > max_chars:
+        return _window(text, start, end, 120)
+    return normalize_text(sent)
+
+
+def trim_evidence(text: str, matched: str | None = None, max_chars: int = _MAX_EVIDENCE) -> str:
+    """Trim an already-captured evidence string (no source offsets) down to the
+    fact sentence. Used to backfill legacy paragraph-length evidence. If the
+    matched phrase is known, anchors on it; otherwise assumes the match was
+    roughly centred (how context_around built the window) and picks the middle
+    sentence."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    core = text.strip("…").strip()  # drop context_around's ellipses
+    if len(core) <= max_chars and len(_boundaries(core)) <= 1:
+        return normalize_text(core)  # already a single short sentence
+    if matched and matched in core:
+        i = core.index(matched)
+        return sentence_evidence(core, i, i + len(matched), max_chars)
+    mid = len(core) // 2
+    return sentence_evidence(core, mid, min(mid + 1, len(core)), max_chars)
 
 
 class DSU:

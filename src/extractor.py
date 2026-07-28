@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from selectolax.parser import HTMLParser
 
-from .util import normalize_text, sha256, word_count
+from .util import content_type_of, normalize_text, sha256, word_count
 
 _STRIP = "script, style, noscript, nav, header, footer, form, svg, iframe, aside"
 _QUESTION_RE = re.compile(r"\?\s*$")
@@ -32,6 +32,9 @@ class Extracted:
     word_count: int = 0
     content_hash: str = ""
     faqs: list[FAQ] = field(default_factory=list)
+    content_type: str = "other"          # blog | news | other (from URL path)
+    author: str | None = None            # only for blog/news; else None
+    author_status: str = "not_applicable"  # found | not_found | not_applicable
 
 
 def _text(node) -> str:
@@ -46,9 +49,18 @@ def _attr(tree, selector, attr) -> str | None:
     return normalize_text(val) if val else None
 
 
-def extract(html: str) -> Extracted:
+def extract(html: str, url: str | None = None) -> Extracted:
     tree = HTMLParser(html)
     out = Extracted()
+
+    # content type is path-derived; author only makes sense for blog/news pages
+    out.content_type = content_type_of(url) if url else "other"
+    if out.content_type in ("blog", "news"):
+        out.author = _extract_author(tree)
+        out.author_status = "found" if out.author else "not_found"
+    else:
+        out.author = None
+        out.author_status = "not_applicable"
 
     title_node = tree.css_first("title")
     out.title = _text(title_node) or None
@@ -83,6 +95,112 @@ def _largest_block(tree):
         if length > best_len:
             best_len, best = length, node
     return best
+
+
+# ---- Author extraction (blog/news only) -----------------------------------
+
+_ARTICLE_TYPES = {"Article", "NewsArticle", "BlogPosting", "Report", "TechArticle"}
+_BYLINE_SEL = (
+    '[rel="author"], .author, .byline, .post-author, .article-author, .entry-author, '
+    '.author-name, .writer, [class*="author"], [class*="byline"], [itemprop="author"]'
+)
+_BYLINE_PREFIX = re.compile(r"^\s*(?:by|written by|author|posted by|words by)\b[:\s]*", re.I)
+# strip a trailing date/role after a separator: "Jane Doe | 19 Mar 2026", "Jane Doe — Editor",
+# "Jane Doe, Senior Editor", "Jane Doe on March 2024"
+_BYLINE_TAIL = re.compile(r"\s*(?:[|•·–—]|,|\bon\b).*$", re.I)
+
+
+def _clean_author(name: str) -> str | None:
+    name = normalize_text(name or "")
+    name = _BYLINE_PREFIX.sub("", name)
+    name = _BYLINE_TAIL.sub("", name).strip(" -–—|,·•")
+    # guard against junk (empty, too long to be a name, or a leftover sentence)
+    if not name or len(name) > 80:
+        return None
+    return name.strip() or None
+
+
+def _authors_from_jsonld(author) -> list[str]:
+    """author may be a string, an object with 'name', or a list of either."""
+    out: list[str] = []
+    if isinstance(author, list):
+        for a in author:
+            out.extend(_authors_from_jsonld(a))
+    elif isinstance(author, dict):
+        n = author.get("name")
+        if n:
+            out.append(str(n))
+    elif isinstance(author, str):
+        out.append(author)
+    return out
+
+
+def _walk_authors(node) -> list[str]:
+    """Collect author names from any Article/NewsArticle/BlogPosting in a JSON-LD tree."""
+    names: list[str] = []
+    if isinstance(node, list):
+        for item in node:
+            names.extend(_walk_authors(item))
+    elif isinstance(node, dict):
+        types = node.get("@type")
+        types = types if isinstance(types, list) else [types]
+        if any(t in _ARTICLE_TYPES for t in types) and node.get("author"):
+            names.extend(_authors_from_jsonld(node["author"]))
+        for key in ("@graph", "mainEntity", "hasPart", "itemListElement"):
+            if key in node:
+                names.extend(_walk_authors(node[key]))
+    return names
+
+
+def _extract_author(tree) -> str | None:
+    """First strategy that yields a name wins: JSON-LD Article author, then author
+    meta tags, then a visible byline. Returns None if nothing usable is found."""
+    # 1) JSON-LD Article/NewsArticle/BlogPosting author.name
+    for script in tree.css('script[type="application/ld+json"]'):
+        raw = script.text()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        names = [n for n in (_clean_author(x) for x in _walk_authors(data)) if n]
+        if names:
+            # de-dupe preserving order, join multiple authors
+            seen, uniq = set(), []
+            for n in names:
+                if n.lower() not in seen:
+                    seen.add(n.lower())
+                    uniq.append(n)
+            return "; ".join(uniq)
+
+    # 2) meta tags
+    for sel, attr in (
+        ('meta[property="article:author"]', "content"),
+        ('meta[property="og:article:author"]', "content"),
+        ('meta[name="author"]', "content"),
+        ('meta[property="author"]', "content"),
+    ):
+        node = tree.css_first(sel)
+        if node:
+            val = _clean_author(node.attributes.get(attr) or "")
+            # skip URLs (article:author sometimes holds a profile link)
+            if val and not val.lower().startswith(("http://", "https://", "/")):
+                return val
+
+    # 3) visible byline near the title
+    for node in tree.css(_BYLINE_SEL):
+        val = _clean_author(node.text())
+        if val:
+            return val
+    # 3b) free-text "By {Name}" fallback in the first part of the article
+    container = tree.css_first("article") or tree.css_first("main")
+    if container:
+        m = re.search(r"\b(?:By|Written by|Author)\b[:\s]+([A-Z][\w.'-]+(?:\s+[A-Z][\w.'-]+){0,3})",
+                      container.text() or "")
+        if m:
+            return _clean_author(m.group(1))
+    return None
 
 
 # ---- FAQ extraction -------------------------------------------------------

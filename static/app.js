@@ -389,6 +389,38 @@ async function fcDelete(id) {
 }
 window.fcDelete = fcDelete;
 
+// "show full context" — pulls the wider paragraph from the STORED page body (no re-crawl)
+async function showContext(ev, id) {
+  ev.stopPropagation();
+  const box = document.getElementById("ctx-" + id);
+  const btn = ev.currentTarget;
+  if (!box) return;
+  if (!box.hidden) { box.hidden = true; btn.textContent = "show full context ▾"; return; }
+  if (!box.dataset.loaded) {
+    box.textContent = "loading…";
+    box.hidden = false;
+    try {
+      const j = await (await fetch(`/issues/${id}/context`)).json();
+      const ctx = (j && j.context) || "(no stored context)";
+      if (j && j.matched) {
+        const i = ctx.indexOf(j.matched);
+        if (i >= 0) {
+          box.textContent = "";
+          box.append(document.createTextNode(ctx.slice(0, i)));
+          const mk = document.createElement("mark");
+          mk.textContent = j.matched;
+          box.append(mk, document.createTextNode(ctx.slice(i + j.matched.length)));
+        } else { box.textContent = ctx; }
+      } else { box.textContent = ctx; }
+      box.dataset.loaded = "1";
+    } catch (e) { box.textContent = "failed to load context"; }
+  } else {
+    box.hidden = false;
+  }
+  btn.textContent = "hide full context ▴";
+}
+window.showContext = showContext;
+
 // false-positive modal
 function openFp(btn) {
   document.getElementById("fp-id").value = btn.dataset.id;

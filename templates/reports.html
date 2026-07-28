@@ -1,14 +1,15 @@
 {% extends "base.html" %}
-{% block title %}Reports & Exports — SDS Fact Check{% endblock %}
+{% block title %}Reports & Exports — ExactFact Checker{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Reports &amp; Exports</h1>
   <p class="muted">Findings for the active website. CSVs are generated live from the database on
     each download (UTF-8, Excel-safe) — never stale.</p></div>
 
-<h2 class="section-h">Findings CSVs</h2>
+<h2 class="section-h">Findings by category</h2>
 <div class="card table-card">
   <table class="tbl">
-    <thead><tr><th>Category</th><th class="num">Open</th><th class="num">All statuses</th><th>Download</th></tr></thead>
+    <thead><tr><th>Category</th><th class="num">Open</th><th class="num">All</th>
+      <th>Open (CSV · Excel)</th><th>All statuses (CSV · Excel)</th></tr></thead>
     <tbody>
     {% for c in cats %}
       <tr>
@@ -16,25 +17,46 @@
         <td class="num">{{ c.open }}</td>
         <td class="num muted">{{ c.all }}</td>
         <td>
-          <a class="btn btn-sm" href="/reports/download.csv?category={{ c.cat }}&scope=open">Open</a>
-          <a class="btn btn-sm" href="/reports/download.csv?category={{ c.cat }}&scope=all">All statuses</a>
+          <a class="btn btn-sm" href="/reports/download.csv?category={{ c.cat }}&scope=open">CSV</a>
+          <a class="btn btn-sm" href="/reports/download.xlsx?category={{ c.cat }}&scope=open">Excel</a>
+        </td>
+        <td>
+          <a class="btn btn-sm" href="/reports/download.csv?category={{ c.cat }}&scope=all">CSV</a>
+          <a class="btn btn-sm" href="/reports/download.xlsx?category={{ c.cat }}&scope=all">Excel</a>
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="4" class="muted">No findings yet — run a sync.</td></tr>
+      <tr><td colspan="5" class="muted">No findings yet — run a sync.</td></tr>
     {% endfor %}
     </tbody>
   </table>
   <div class="filters-bar" style="margin-top:14px">
-    <a class="btn btn-primary" href="/reports/download.csv?scope=open">⭳ Export all findings (open)</a>
-    <a class="btn" href="/reports/download.csv?scope=all">⭳ Export all matches (all statuses)</a>
-    {% if ext_open %}<a class="btn" href="/reports/download-external.csv?scope=open">⭳ External findings ({{ ext_open }})</a>{% endif %}
+    <span class="muted small">Export all findings (open):</span>
+    <a class="btn btn-sm" href="/reports/download.csv?scope=open">CSV</a>
+    <a class="btn btn-sm" href="/reports/download.xlsx?scope=open">Excel</a>
+    <span class="muted small" style="margin-left:10px">All matches:</span>
+    <a class="btn btn-sm" href="/reports/download.csv?scope=all">CSV</a>
+    <a class="btn btn-sm" href="/reports/download.xlsx?scope=all">Excel</a>
+    <a class="btn btn-primary" style="margin-left:auto" href="/reports/full.xlsx?scope=open">⭳ Full report (Excel, all tabs)</a>
   </div>
+  <div class="filters-bar" style="margin-top:8px">
+    <span class="muted small">One row per URL (aggregated page fix-list):</span>
+    <a class="btn btn-sm" href="/reports/download.csv?view=by_url&scope=open">CSV</a>
+    <a class="btn btn-sm" href="/reports/download.xlsx?view=by_url&scope=open">Excel</a>
+  </div>
+  {% if ext_open %}
+  <div class="filters-bar" style="margin-top:8px">
+    <span class="muted small">External findings ({{ ext_open }}):</span>
+    <a class="btn btn-sm" href="/reports/download-external.csv?scope=open">CSV</a>
+    <a class="btn btn-sm" href="/reports/download-external.xlsx?scope=open">Excel</a>
+  </div>
+  {% endif %}
 </div>
 
 <h2 class="section-h">HTML report</h2>
 <div class="card">
   <button class="btn btn-primary" onclick="runExport()">Generate HTML report</button>
+  <a class="btn" href="/reports/full.xlsx?scope=open">Export to Excel (multi-sheet)</a>
   <span class="muted small" id="export-msg" style="margin-left:10px"></span>
   {% if html_files %}
   <ul class="linklist" style="margin-top:12px">

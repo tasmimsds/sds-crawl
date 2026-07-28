@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SDS Manager — Internal Audit Report</title>
+<title>ExactFact Checker — Fact Check Report</title>
 <style>
   :root{--bg:#0f1115;--card:#1a1d24;--border:#2a2f3a;--fg:#e6e9ef;--muted:#9aa4b2;
     --accent:#4f8cff;--critical:#ff5c5c;--high:#ff9f43;--medium:#ffd93d;--low:#6bcB77}
@@ -11,6 +11,9 @@
   body{margin:0;background:var(--bg);color:var(--fg);
     font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
   header{padding:18px 26px;border-bottom:1px solid var(--border)}
+  .rpt-head{display:flex;align-items:center;gap:16px}
+  .rpt-logo{height:40px;width:auto;background:#fff;padding:6px 10px;border-radius:8px}
+  .rpt-by{font-size:13px;font-weight:500;color:var(--muted)}
   h1{margin:0 0 4px;font-size:19px}
   h2{font-size:15px;margin:22px 0 10px}
   .sub{color:var(--muted);font-size:13px}
@@ -43,14 +46,19 @@
   .detail-row td{background:#12151c;color:var(--muted)}
   .box{margin:4px 0} .box b{color:var(--fg)}
   code{background:#000;padding:1px 6px;border-radius:4px;color:#cdd6e4}
+  code mark,mark{background:#fff2b0;color:#111;padding:0 2px;border-radius:3px}
   .status-fixed,.status-ignored{opacity:.5}
   .muted{color:var(--muted)}
 </style>
 </head>
 <body>
-<header>
-  <h1>SDS Manager — Internal Audit Report</h1>
-  <div class="sub" id="meta"></div>
+<header class="rpt-head">
+  {% if logo_data_uri %}<img class="rpt-logo" src="{{ logo_data_uri }}" alt="SDS Manager" />{% endif %}
+  <div>
+    <h1>ExactFact Checker <span class="rpt-by">by SDS Manager</span></h1>
+    <div class="sub">Fact Check Report</div>
+    <div class="sub" id="meta"></div>
+  </div>
 </header>
 <div class="wrap">
   <div class="cards" id="cards"></div>
@@ -83,6 +91,8 @@ const DATA = {{ payload_json | safe }};
 const SEV={critical:0,high:1,medium:2,low:3};
 const $=s=>document.querySelector(s);
 const esc=s=>(s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// escape, then <mark> the matched phrase (highlight the exact fact inside trimmed evidence)
+const hl=(text,matched)=>{const t=esc(text);const m=esc((matched||"").trim());if(!m)return t;const i=t.indexOf(m);return i<0?t:t.slice(0,i)+"<mark>"+m+"</mark>"+t.slice(i+m.length);};
 
 document.getElementById("meta").textContent =
   `${DATA.source.name||DATA.source.location} · generated ${DATA.generated_at} · `
@@ -145,13 +155,15 @@ function render(){
   for(const i of rows){
     const tr=document.createElement("tr");tr.className="issue status-"+i.status;
     tr.innerHTML=`<td><span class="pill sev-${i.severity}">${i.severity}</span></td>`
-      +`<td class="cat">${esc(i.category)}</td><td class="url">${esc(i.url)}</td>`
+      +`<td class="cat">${esc(i.category)}</td><td class="url">${esc(i.url)}`
+      +(i.content_type&&i.content_type!=="other"?` <span class="tag">${esc(i.content_type)}</span>`:"")
+      +(i.author?` <span class="tag">✍ ${esc(i.author)}</span>`:"")+`</td>`
       +`<td>${esc(i.locale||"")}${i.hg!=null?`<span class="tag">hg ${i.hg}</span>`:""}</td>`
       +`<td>${esc(i.title)}</td>`;
     const d=document.createElement("tr");d.className="detail-row";d.style.display="none";
     d.innerHTML=`<td colspan="5">`
       +(i.detail?`<div class="box">${esc(i.detail)}</div>`:"")
-      +(i.evidence?`<div class="box"><b>Quote:</b> <code>${esc(i.evidence)}</code></div>`:"")
+      +(i.evidence?`<div class="box"><b>Quote:</b> <code>${hl(i.evidence,i.matched_value)}</code></div>`:"")
       +(i.expected?`<div class="box"><b>Should say:</b> ${esc(i.expected)}</div>`:"")
       +(i.related_url?`<div class="box"><b>Related:</b> <span class="url">${esc(i.related_url)}</span></div>`:"")
       +`<div class="box muted">detection: ${esc(i.detection_method)} · status ${esc(i.status)} · id ${i.id}`

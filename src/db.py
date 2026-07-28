@@ -355,6 +355,9 @@ def connect() -> sqlite3.Connection:
     _ensure_columns(conn, "fact_rules", {"scope": "TEXT DEFAULT 'both'", "product_id": "INTEGER"})
     _ensure_columns(conn, "issues", {"product_id": "INTEGER"})
     _ensure_columns(conn, "sources", {"run_scope": "TEXT", "locale_scope": "TEXT"})
+    _ensure_columns(conn, "urls", {
+        "content_type": "TEXT", "author": "TEXT", "author_status": "TEXT",
+    })
     _ensure_columns(conn, "jobs", {"scope_label": "TEXT", "run_scope": "TEXT"})
     _ensure_columns(conn, "external_findings", {
         "finding_type": "TEXT", "fact_rule": "TEXT", "page_id": "INTEGER",
@@ -364,6 +367,7 @@ def connect() -> sqlite3.Connection:
     _ensure_columns(conn, "issues", {
         "deleted_at": "TEXT", "note": "TEXT", "edited": "INTEGER DEFAULT 0",
         "original_snapshot": "TEXT", "last_checked_at": "TEXT",
+        "matched_value": "TEXT",  # exact phrase to highlight inside trimmed evidence
     })
     conn.commit()
     _seed_settings(conn)  # premium model defaults + migrate away any stored :free model
@@ -371,8 +375,115 @@ def connect() -> sqlite3.Connection:
     conn.execute("DELETE FROM issues WHERE category IN "
                  "('seo_technical','cannibalization','status','crawl')")
     conn.commit()
+    dedup_issues(conn)  # collapse true-duplicate findings (idempotent; no-op once clean)
+    backfill_content_type(conn)  # pure path-parse; instant; keeps blog/news author_status intact
     _conn = conn
     return conn
+
+
+def backfill_content_type(conn) -> dict:
+    """Set urls.content_type for every URL from its path (instant, idempotent). Leaves
+    author untouched (that needs page HTML). For URLs with no author_status yet, seed it:
+    'not_applicable' for 'other', 'not_found' for blog/news (until author extraction runs)."""
+    from .util import content_type_of
+    rows = conn.execute("SELECT id, url, content_type, author_status FROM urls").fetchall()
+    counts = {"blog": 0, "news": 0, "other": 0}
+    changed = 0
+    for r in rows:
+        ct = content_type_of(r["url"])
+        counts[ct] += 1
+        new_status = r["author_status"]
+        if new_status is None:
+            new_status = "not_applicable" if ct == "other" else "not_found"
+        if r["content_type"] != ct or r["author_status"] != new_status:
+            conn.execute("UPDATE urls SET content_type=?, author_status=? WHERE id=?",
+                         (ct, new_status, r["id"]))
+            changed += 1
+    if changed:
+        conn.commit()
+    return {"counts": counts, "changed": changed}
+
+
+def _fact_rule_of(title: str) -> str:
+    """Derive the fact RULE (detector) from an issue title, stripping volatile trailing
+    values so two rows for the SAME rule+quote collapse but DIFFERENT rules never do:
+      'sds_database_size:stale'          -> 'sds_database_size'
+      'sdsmanager_countries:inconsistent'-> 'sdsmanager_countries'
+      'llm:language_count:<hash|expected>'-> 'llm:language_count'  (expected/hash is NOT the rule)
+      'lang_ctx:SDS documents:29'        -> 'lang_ctx:SDS documents'
+    """
+    t = title or ""
+    if t.startswith("llm:"):
+        p = t.split(":")
+        return "llm:" + (p[1] if len(p) > 1 else "")
+    if t.startswith(("lang_ctx:", "reg_ctx:")):
+        p = t.split(":")
+        return ":".join(p[:2])           # keep detector + context method
+    return t.split(":", 1)[0]            # deterministic rule slug / prefix
+
+
+def dedup_issues(conn) -> int:
+    """Collapse TRUE-duplicate findings on the spec identity (url, fact_rule, evidence).
+    fact_rule ignores the volatile 'expected'/hash in the title, so the AI screen flagging one
+    quote twice with different 'expected' collapses — but two DIFFERENT rules on the same quote
+    (distinct findings) are KEPT. Survivor = earliest-detected; open if any copy is open (else
+    unclear if any is); carries the latest last_checked_at."""
+    from collections import defaultdict
+    rows = conn.execute(
+        "SELECT id, source_id, url_id, category, title, COALESCE(evidence,'') ev, status, "
+        "detected_at, last_checked_at FROM issues WHERE deleted_at IS NULL "
+        "ORDER BY detected_at, id").fetchall()
+    groups = defaultdict(list)
+    for r in rows:
+        groups[(r["source_id"], r["url_id"], r["category"], _fact_rule_of(r["title"]), r["ev"])].append(r)
+    removed = 0
+    for grp in groups.values():
+        if len(grp) < 2:
+            continue
+        keep = grp[0]["id"]
+        statuses = [r["status"] for r in grp]
+        new_status = "open" if "open" in statuses else ("unclear" if "unclear" in statuses else grp[0]["status"])
+        checked = max((r["last_checked_at"] for r in grp if r["last_checked_at"]), default=None)
+        conn.execute("UPDATE issues SET status=?, last_checked_at=? WHERE id=?", (new_status, checked, keep))
+        dead = [r["id"] for r in grp[1:]]
+        conn.execute(f"DELETE FROM issues WHERE id IN ({','.join('?' for _ in dead)})", dead)
+        removed += len(dead)
+    if removed:
+        conn.commit()
+        print(f"dedup_issues: removed {removed} true-duplicate finding rows (key: url+fact_rule+evidence).")
+    return removed
+
+
+def backfill_evidence(conn) -> dict:
+    """One-time: trim legacy paragraph-length evidence down to the fact sentence.
+    First recovers matched_value from fact_matches (same url_id + evidence) so the
+    trim can anchor exactly; then re-trims each finding's evidence in place. Never
+    re-crawls. Returns {trimmed, examples:[(before, after)]}."""
+    from .util import trim_evidence
+    # recover the matched phrase where a fact_match stored it for the same quote
+    conn.execute(
+        """UPDATE issues SET matched_value = (
+               SELECT fm.matched_value FROM fact_matches fm
+               WHERE fm.url_id = issues.url_id
+                 AND COALESCE(fm.evidence,'') = COALESCE(issues.evidence,'')
+                 AND fm.matched_value IS NOT NULL AND fm.matched_value != ''
+               LIMIT 1)
+           WHERE matched_value IS NULL""")
+    rows = conn.execute(
+        "SELECT id, evidence, matched_value FROM issues "
+        "WHERE evidence IS NOT NULL AND evidence != ''").fetchall()
+    trimmed = 0
+    examples: list[tuple[str, str]] = []
+    for r in rows:
+        before = r["evidence"]
+        after = trim_evidence(before, matched=r["matched_value"])
+        if after and after != before:
+            conn.execute("UPDATE issues SET evidence=? WHERE id=?", (after, r["id"]))
+            trimmed += 1
+            if len(examples) < 5:
+                examples.append((before, after))
+    conn.commit()
+    return {"trimmed": trimmed, "total": len(rows), "examples": examples}
 
 
 # ---- run scope (analysis + locale) persisted per project ----
@@ -675,17 +786,19 @@ def record_issue(
     detection_method: str = "regex",
     status: str = "open",
     product_id: int | None = None,
+    matched_value: str | None = None,
 ) -> None:
     conn.execute(
         """INSERT INTO issues
              (source_id, url_id, detected_at, category, severity, title, detail,
-              evidence, expected, related_url_id, detection_method, product_id, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              evidence, expected, related_url_id, detection_method, product_id, status,
+              matched_value)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(url_id, category, title, related_url_id) DO UPDATE SET
              detected_at=excluded.detected_at, severity=excluded.severity,
              detail=excluded.detail, evidence=excluded.evidence,
              expected=excluded.expected, detection_method=excluded.detection_method,
-             product_id=excluded.product_id,
+             product_id=excluded.product_id, matched_value=excluded.matched_value,
              -- keep user decisions; a soft-deleted finding stays suppressed unless its
              -- evidence text changes (then it's a new finding and reopens).
              status=CASE
@@ -698,6 +811,7 @@ def record_issue(
         (
             source_id, url_id, now_iso(), category, severity, title, detail,
             evidence, expected, related_url_id or 0, detection_method, product_id, status,
+            matched_value,
         ),
     )
 

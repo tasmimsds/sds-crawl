@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ title }} — SDS Fact Check{% endblock %}
+{% block title %}{{ title }} — ExactFact Checker{% endblock %}
 {% block content %}
 {% if seo_note %}
 <div class="alert alert-error" style="background:#fff7e8;color:#8a5a09;border-color:#f6d99a">
@@ -26,8 +26,11 @@
     <button class="chip" type="button" onclick="location.href='/results?saved={{ sf.id }}'">★ {{ sf.name }}</button>
   {% endfor %}
   <span id="filter-count" class="muted small"></span>
-  <a class="btn btn-sm" style="margin-left:auto"
-     href="/results/export.csv{% if filter_json %}?filter={{ filter_json|urlencode }}{% endif %}">⭳ Export CSV</a>
+  <span class="muted small" style="margin-left:auto">Export filtered view:</span>
+  <a class="btn btn-sm"
+     href="/results/export.csv{% if filter_json %}?filter={{ filter_json|urlencode }}{% endif %}">CSV</a>
+  <a class="btn btn-sm"
+     href="/results/export.xlsx{% if filter_json %}?filter={{ filter_json|urlencode }}{% endif %}">Excel</a>
   <a class="btn btn-sm" href="/reports">📄 Reports</a>
 </div>
 
@@ -60,6 +63,8 @@ window.FINDINGS_FIELDS = [
   {key:"severity", label:"Severity", type:"enum", options:["critical","high","medium","low"]},
   {key:"status", label:"Status", type:"enum", options:["open","fixed","ignored","false_positive","unverifiable"]},
   {key:"locale", label:"Locale", type:"enum", options:[{% for l in locales %}"{{ l }}",{% endfor %}]},
+  {key:"content_type", label:"Content type", type:"enum", options:["blog","news","other"]},
+  {key:"author", label:"Author", type:"text"},
   {key:"product", label:"Product", type:"enum", options:[{% for p in products %}"{{ p.name }}",{% endfor %}]},
   {key:"fact_rule", label:"Fact rule", type:"text"},
   {key:"source_domain", label:"Source domain (external)", type:"text"},
@@ -104,13 +109,19 @@ window.FINDINGS_INITIAL = {{ filter_json | safe if filter_json else 'null' }};
       <tr class="issue-row" id="row-{{ i.id }}" onclick="toggleDetail(this)">
         <td><span class="badge sev-{{ i.severity }}">{{ i.severity }}</span></td>
         <td class="muted small">{{ i.category|cat_label }}{% if i.product_name %}<br><span class="pill">{{ i.product_name }}</span>{% endif %}</td>
-        <td><a class="url" href="{{ i.url }}" target="_blank" title="{{ i.url }}" onclick="event.stopPropagation()">{{ i.url|short_url }}</a></td>
+        <td><a class="url" href="{{ i.url }}" target="_blank" title="{{ i.url }}" onclick="event.stopPropagation()">{{ i.url|short_url }}</a>
+          {% if i.content_type and i.content_type != 'other' %}<span class="pill pill-{{ i.content_type }}">{{ i.content_type }}</span>{% endif %}
+          {% if i.author %}<span class="pill pill-author" title="Author">✍ {{ i.author }}</span>{% endif %}</td>
         <td>{{ i.locale or '' }}</td>
         <td>{{ i.title|pretty_title }}{% if i.edited %} <span class="pill">edited</span>{% endif %}</td>
       </tr>
       <tr class="detail" hidden><td colspan="5">
         {% if i.detail %}<div class="box">{{ i.detail }}</div>{% endif %}
-        {% if i.evidence %}<div class="box"><b>Quote:</b><div class="evidence">{{ i.evidence }}</div></div>{% endif %}
+        {% if i.evidence %}<div class="box"><b>Quote:</b>
+          <div class="evidence">{{ i.evidence|highlight_match(i.matched_value) }}</div>
+          <button type="button" class="linklike small" onclick="showContext(event, {{ i.id }})">show full context ▾</button>
+          <div class="evidence full-context" id="ctx-{{ i.id }}" hidden></div>
+        </div>{% endif %}
         {% if i.expected %}<div class="box"><b>Should say:</b> {{ i.expected }}</div>{% endif %}
         {% if i.note %}<div class="box muted small">Note: {{ i.note }}</div>{% endif %}
         <div class="box muted small">{{ i.detection_method }} · status: <span class="st-{{ i.id }}">{{ i.status }}</span>

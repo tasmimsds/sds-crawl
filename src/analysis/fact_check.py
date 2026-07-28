@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 from ..db import CATEGORIES, record_issue
-from ..util import context_around
+from ..util import sentence_evidence, sha256
 
 _FREE_TRIAL_CTX = re.compile(r"free trial|\btrial\b", re.I)
 _FREE_PLAN_HARD = re.compile(
@@ -108,9 +108,13 @@ async def fact_check_llm(conn, source_id: int, *, all_locales: bool = False):
                 record_issue(
                     conn, source_id=source_id, url_id=page["url_id"], category=cat,
                     severity=item.get("severity", "medium"),
-                    title=f"llm:{cat}:{(item.get('expected') or quote)[:32]}",
-                    detail=item.get("explanation"), evidence=quote,
+                    # title keyed on the QUOTE (not the volatile 'expected'), so the same
+                    # quote flagged again upserts instead of creating a duplicate row.
+                    title=f"llm:{cat}:{sha256(quote)[:12]}",
+                    detail=item.get("explanation"),
+                    evidence=sentence_evidence(page["body_text"], idx, idx + len(quote)),
                     expected=item.get("expected"), detection_method="ai_screen",
+                    matched_value=quote,
                 )
                 stats["issues"] += 1
         return run

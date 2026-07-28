@@ -6,7 +6,7 @@ import re
 from ..config import settings
 from ..db import record_issue, record_match
 from ..rules import load_rules
-from ..util import context_around
+from ..util import sentence_evidence
 
 
 def _latest_bodies(conn, source_id):
@@ -71,7 +71,7 @@ def analyze_facts_regex(conn, source_id: int) -> int:
                 if hit:
                     break
             if hit:
-                ev = context_around(body, hit.start(), hit.end() - hit.start())
+                ev = sentence_evidence(body, hit.start(), hit.end())
                 record_issue(
                     conn,
                     source_id=source_id,
@@ -84,6 +84,7 @@ def analyze_facts_regex(conn, source_id: int) -> int:
                     expected=f.get("current_value"),
                     detection_method="regex",
                     product_id=f.get("product_id"),
+                    matched_value=hit.group(0),
                 )
                 record_match(conn, fact_rule_id=f["pk"], url_id=page["url_id"], verdict="issue",
                              evidence=ev, matched_value=hit.group(0), product_id=f.get("product_id"))
@@ -100,7 +101,7 @@ def analyze_facts_regex(conn, source_id: int) -> int:
                     break
             if pos:
                 record_match(conn, fact_rule_id=f["pk"], url_id=page["url_id"], verdict="positive",
-                             evidence=context_around(body, pos.start(), pos.end() - pos.start()),
+                             evidence=sentence_evidence(body, pos.start(), pos.end()),
                              matched_value=pos.group(0), product_id=f.get("product_id"))
     conn.commit()
     print(f"Facts (regex) analysis: {issues} issues across {len(rows)} pages.")

@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 
 from ..db import default_product_id, record_issue, record_match
-from ..util import context_around
+from ..util import sentence_evidence
 
 _WIN = 160  # chars of context each side of a claim
 
@@ -95,7 +95,7 @@ def analyze_product_claims(conn, source_id: int) -> dict:
         for m in _LANG_RE.finditer(body):
             n = m.group(1)
             seg = body[max(0, m.start() - _WIN): m.end() + _WIN]
-            quote = context_around(body, m.start(), m.end() - m.start())
+            quote = sentence_evidence(body, m.start(), m.end())
             has_ex = bool(_EXACTSDS_CTX.search(seg))
             has_sds = bool(_SDS_CTX.search(seg))
             has_inv = bool(_INV_CTX.search(seg))
@@ -117,6 +117,7 @@ def analyze_product_claims(conn, source_id: int) -> dict:
                             f"documents are {sds_lang} — reword to specify which."),
                     evidence=quote, expected=f"{inv_lang} (inventory) or {sds_lang} (SDS documents)",
                     detection_method="context", status="unclear", product_id=default_pid,
+                    matched_value=n,
                 )
                 record_match(conn, fact_rule_id=rpk["sds"], url_id=page["url_id"],
                              verdict="unclear", evidence=quote, matched_value=n, product_id=pid["sds"])
@@ -129,6 +130,7 @@ def analyze_product_claims(conn, source_id: int) -> dict:
                     title=f"lang_ctx:{method}:{n}",
                     detail=f"{method} languages should be {expected}, page says '{n} languages'.",
                     evidence=quote, expected=expected, detection_method="context", product_id=who,
+                    matched_value=n,
                 )
                 record_match(conn, fact_rule_id=pk, url_id=page["url_id"], verdict="issue",
                              evidence=quote, matched_value=n, product_id=who)
@@ -142,7 +144,7 @@ def analyze_product_claims(conn, source_id: int) -> dict:
         for m in _REG_RE.finditer(body):
             n = m.group(1)
             seg = body[max(0, m.start() - _WIN): m.end() + _WIN]
-            quote = context_around(body, m.start(), m.end() - m.start())
+            quote = sentence_evidence(body, m.start(), m.end())
             if _EXACTSDS_CTX.search(seg):
                 expected, who, method, pk = ex_reg, pid["ex_reg"], "ExactSDS", rpk["ex_reg"]
             else:
@@ -154,6 +156,7 @@ def analyze_product_claims(conn, source_id: int) -> dict:
                     title=f"reg_ctx:{method}:{n}",
                     detail=f"{method} supports {expected} regulations, page says '{n} regulations'.",
                     evidence=quote, expected=expected, detection_method="context", product_id=who,
+                    matched_value=n,
                 )
                 record_match(conn, fact_rule_id=pk, url_id=page["url_id"], verdict="issue",
                              evidence=quote, matched_value=n, product_id=who)
@@ -174,8 +177,9 @@ def analyze_product_claims(conn, source_id: int) -> dict:
                 title="exactsds_reg_fixed",
                 detail="ExactSDS regulations are NOT fixed — the admin Regulation Builder adds "
                        "new regulations with no code change. This claim is wrong.",
-                evidence=context_around(body, m.start(), m.end() - m.start()),
+                evidence=sentence_evidence(body, m.start(), m.end()),
                 detection_method="context", product_id=pid["ex_reg"],
+                matched_value=m.group(0),
             )
             stats["reg_fixed"] += 1
 

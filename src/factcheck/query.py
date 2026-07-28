@@ -10,7 +10,7 @@ import re
 
 from ..analysis.llm import LlmClient
 from ..db import FTS_ENABLED
-from ..util import context_around, sha256
+from ..util import sentence_evidence, sha256, trim_evidence
 
 _TOKEN = re.compile(r'[^\w\s+.,%$-]', re.UNICODE)
 
@@ -122,7 +122,7 @@ def _term_context(body: str, terms: list[str]) -> str:
             best = (i, len(t))
     if best is None:
         return ""
-    ctx = context_around(body, best[0], best[1], 150)
+    ctx = sentence_evidence(body, best[0], best[0] + best[1])
     # highlight the matched term
     return re.sub("(" + re.escape(body[best[0]:best[0] + best[1]]) + ")",
                   r"<mark>\1</mark>", ctx, count=1, flags=re.I)
@@ -207,8 +207,8 @@ def record_query_issues(conn, source_id: int, query_id: int, query_text: str,
             conn, source_id=source_id, url_id=r["url_id"], category="other_mismatch",
             severity="high", title=f"query:{query_text[:48]}",
             detail=r.get("verdict_reason") or f"Contradicts expected value: {correct_value}",
-            evidence=_MARK.sub("", r["snippet"]), expected=correct_value,
-            detection_method="llm",
+            evidence=trim_evidence(_MARK.sub("", r["snippet"]), matched=correct_value),
+            expected=correct_value, detection_method="llm", matched_value=correct_value,
         )
         # link the issue to the query
         conn.execute(
