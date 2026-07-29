@@ -26,3 +26,11 @@ venv/
 .DS_Store
 *.log
 server.log
+
+# DB export bundles — share out-of-band, never commit (see DB_SHARING_NOTES.md)
+exactfact_database*.zip
+exactfact_db_*.db
+exactfact_db_dump.sql
+RESTORE*.txt
+*.db-wal
+*.db-shm

@@ -104,6 +104,33 @@ def brightdata() -> dict:
     }
 
 
+def dataforseo() -> dict:
+    """DataForSEO SERP API config from the environment (HTTP Basic: login:password)."""
+    return {
+        "login": (os.getenv("DATAFORSEO_LOGIN") or "").strip(),
+        "password": (os.getenv("DATAFORSEO_PASSWORD") or "").strip(),
+        "location": (os.getenv("SERP_LOCATION") or "us").strip(),
+        "language": (os.getenv("SERP_LANGUAGE") or "en").strip(),
+        "results": int(os.getenv("SERP_RESULTS_PER_QUERY") or 20),
+    }
+
+
+def dataforseo_enabled() -> bool:
+    d = dataforseo()
+    return bool(d["login"] and d["password"])
+
+
+def serp_provider() -> str:
+    """Which SERP backend serp_search() prefers. Explicit SERP_PROVIDER wins; else
+    DataForSEO if configured, else Bright Data. serp_search() still falls back to the
+    other provider at call time if the preferred one errors."""
+    p = (os.getenv("SERP_PROVIDER") or "").strip().lower()
+    if p in ("dataforseo", "brightdata"):
+        return p
+    return "dataforseo" if dataforseo_enabled() else "brightdata"
+
+
 def serp_enabled() -> bool:
+    """External fact-check is possible if ANY SERP provider is configured."""
     bd = brightdata()
-    return bool(bd["username"] and bd["password"])
+    return dataforseo_enabled() or bool(bd["username"] and bd["password"])
