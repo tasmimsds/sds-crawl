@@ -181,6 +181,85 @@ def pipeline_state(conn, source_id: int) -> dict:
     }
 
 
+# external flow stages: DISCOVER -> FETCH -> SCOPE -> READ -> FACT MATCH
+_EXT_STAGE_OF = {"discover": 1, "fetch": 2, "scope": 3, "read": 4, "factcheck": 5, "done": 5}
+
+
+def external_pipeline_state(conn, source_id: int) -> dict:
+    """5-stage EXTERNAL flow (DISCOVER -> FETCH -> SCOPE -> READ -> FACT MATCH) for a
+    project's brand: live if an external run is going, else last run's numbers. Strictly
+    scoped to THIS project (its brand profile + its external_pages)."""
+    from .external.brand import get_brand
+    brand = get_brand(conn, source_id)
+    brand_name = (brand or {}).get("brand_name") or ""
+
+    one = lambda q, *a: conn.execute(q, a).fetchone()["c"]
+    # DISCOVER — sources by type + approval state
+    manual = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND source_type='manual'", source_id)
+    candidates = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='candidate'", source_id)
+    ready = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status IN ('pending','ok','blocked','error')", source_id)
+    total_sources = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=?", source_id)
+    # FETCH — fetch outcomes
+    fok = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='ok'", source_id)
+    fblocked = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='blocked'", source_id)
+    ferror = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='error'", source_id)
+    fpending = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='pending'", source_id)
+    # SCOPE / READ — brand relevance of snippets
+    snip_total = one("SELECT COUNT(*) c FROM external_snippets WHERE source_id=?", source_id)
+    snip_kept = one("SELECT COUNT(*) c FROM external_snippets WHERE source_id=? AND about_brand=1", source_id)
+    snip_disc = one("SELECT COUNT(*) c FROM external_snippets WHERE source_id=? AND about_brand=0", source_id)
+    domains = one("SELECT COUNT(DISTINCT domain) c FROM external_pages WHERE source_id=? AND fetch_status='ok'", source_id)
+    # FACT MATCH — issues live from external_findings; positive/unclear from the run job
+    issues_live = one("SELECT COUNT(*) c FROM external_findings WHERE source_id=? AND kind='factcheck' AND status='open' AND deleted_at IS NULL", source_id)
+
+    running = conn.execute(
+        "SELECT * FROM jobs WHERE source_id=? AND type='external' AND status IN ('running','queued') ORDER BY id DESC LIMIT 1",
+        (source_id,)).fetchone()
+    last = conn.execute(
+        "SELECT * FROM jobs WHERE source_id=? AND type='external' AND status IN ('done','error','canceled') ORDER BY id DESC LIMIT 1",
+        (source_id,)).fetchone()
+    job = running or last
+    active = _EXT_STAGE_OF.get(job["stage"], 0) if running and job else 0
+    ever_ran = bool(last)
+
+    def status_for(idx):
+        if not running:
+            if last and last["status"] == "error":
+                return "failed" if idx >= active else "complete"
+            return "complete" if ever_ran else "pending"
+        if idx < active:
+            return "complete"
+        if idx == active:
+            return "running"
+        return "pending"
+
+    jr = job if job else None
+    positive = (jr["ext_positive"] if jr and "ext_positive" in jr.keys() else 0) or 0
+    unclear = (jr["ext_unclear"] if jr and "ext_unclear" in jr.keys() else 0) or 0
+    issue_ct = issues_live or ((jr["ext_issue"] if jr and "ext_issue" in jr.keys() else 0) or 0)
+
+    return {
+        "running": bool(running),
+        "job_id": (running["id"] if running else (last["id"] if last else None)),
+        "stage_active": active, "last_finished": (last["finished_at"] if last else None),
+        "error": (job["error"] if job else None),
+        "brand": brand_name,
+        "has_external": total_sources > 0,
+        "has_brand": bool(brand_name),
+        "domains": domains,
+        "s1": {"name": "DISCOVER", "status": status_for(1), "manual": manual,
+               "candidates": candidates, "ready": ready, "total": total_sources},
+        "s2": {"name": "FETCH", "status": status_for(2), "ok": fok, "blocked": fblocked,
+               "errored": ferror, "pending": fpending},
+        "s3": {"name": "SCOPE", "status": status_for(3), "total": snip_total,
+               "kept": snip_kept, "discarded": snip_disc},
+        "s4": {"name": "READ", "status": status_for(4), "claims": snip_kept},
+        "s5": {"name": "FACT MATCH", "status": status_for(5), "positive": positive,
+               "issues": issue_ct, "unclear": unclear},
+        "message": (job["message"] if job else ""),
+    }
+
+
 _FACT_CATS = ("database_size", "positioning", "free_claim", "language_count", "region_count",
               "regulation_count", "feature_claim", "faq", "other_mismatch")
 
@@ -319,28 +398,45 @@ async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
 # ---- needs-sync detector (DB-based; cached by caller) ----
 
 async def run_external_job(conn, job_id: int, source_id: int, *, discover: bool = True) -> None:
-    """Staged external run: (discover) → fetch pages → brand-scope → fact-check."""
+    """Staged external run mirroring the dashboard flow:
+    DISCOVER → FETCH → SCOPE → READ → FACT MATCH. Scoped to this project's brand."""
+    from .config import serp_enabled
     from .external.factcheck_ext import run_external_factcheck
-    from .external.pages import crawl_external_pages
+    from .external.pages import crawl_external_pages, discover_mentions
     from .external.scope import scope_pages
 
-    update_job(conn, job_id, status="running", started_at=now_iso(), stage="fetch",
-               message="Fetching external pages…")
+    update_job(conn, job_id, status="running", started_at=now_iso(), stage="discover",
+               message="Finding where the brand is mentioned…")
     try:
         def prog(done, total, errs):
             update_job(conn, job_id, progress=done, total=total, errors=errs)
 
+        # 1) DISCOVER — web discovery adds CANDIDATES (approval-gated; not fetched this run)
+        if discover and serp_enabled():
+            try:
+                await run_in_threadpool(discover_mentions, conn, source_id)
+            except Exception as exc:  # noqa: BLE001 — discovery is best-effort
+                print(f"  ! discovery skipped: {exc}")
+
+        # 2) FETCH — pull the approved/manual pending pages
         update_job(conn, job_id, stage="fetch", message="Fetching external pages…")
         await crawl_external_pages(conn, source_id, only_pending=True, on_progress=prog)
 
+        # 3) SCOPE — keep only passages specifically about THIS brand
         update_job(conn, job_id, stage="scope", message="Checking which mentions are about us…")
         await scope_pages(conn, source_id, on_progress=prog)
 
+        # 4) READ — the brand-relevant passages are the extracted claims (display stage)
+        update_job(conn, job_id, stage="read", message="Extracting brand claims…")
+
+        # 5) FACT MATCH — run fact rules against brand snippets
         update_job(conn, job_id, stage="factcheck", message="Checking external facts…")
         res = await run_external_factcheck(conn, source_id)
 
         update_job(conn, job_id, status="done", stage="done", finished_at=now_iso(),
-                   message="External check complete.", issues_found=res["findings"])
+                   message="External check complete.", issues_found=res["findings"],
+                   ext_positive=res.get("positive", 0), ext_issue=res.get("findings", 0),
+                   ext_unclear=res.get("unclear", 0))
     except asyncio.CancelledError:
         update_job(conn, job_id, status="canceled", cancelled=1, finished_at=now_iso(),
                    message="External check cancelled.")

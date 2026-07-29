@@ -351,6 +351,9 @@ def connect() -> sqlite3.Connection:
         "claims_extracted": "INTEGER DEFAULT 0", "faqs_extracted": "INTEGER DEFAULT 0",
         "facts_checked": "INTEGER DEFAULT 0", "matches_positive": "INTEGER DEFAULT 0",
         "matches_issue": "INTEGER DEFAULT 0", "matches_unclear": "INTEGER DEFAULT 0",
+        # external pipeline FACT MATCH counts (positive/issue/unclear about the brand)
+        "ext_positive": "INTEGER DEFAULT 0", "ext_issue": "INTEGER DEFAULT 0",
+        "ext_unclear": "INTEGER DEFAULT 0",
     })
     _ensure_columns(conn, "fact_rules", {"scope": "TEXT DEFAULT 'both'", "product_id": "INTEGER"})
     _ensure_columns(conn, "issues", {"product_id": "INTEGER"})

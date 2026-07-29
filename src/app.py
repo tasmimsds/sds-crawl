@@ -251,14 +251,15 @@ def dashboard(request: Request):
         ext_find = conn.execute(
             "SELECT COUNT(*) c FROM external_findings WHERE source_id=? AND kind='factcheck' AND status='open'",
             (sid,)).fetchone()["c"]
-        from .jobs import pipeline_state
+        from .jobs import pipeline_state, external_pipeline_state
         from .db import get_run_config, scope_label
         pipe = pipeline_state(conn, sid)
+        ext_pipe = external_pipeline_state(conn, sid)
         rc = get_run_config(conn, sid)
         cards.append({"row": s, "total": total, "crawled": crawled, "errors": errs,
                       "running": running, "last": last, "needs_reason": reason, "state": state,
                       "sched": sch, "ext_sources": ext_src, "ext_fetched": ext_ok,
-                      "ext_findings": ext_find, "pipe": pipe,
+                      "ext_findings": ext_find, "pipe": pipe, "ext_pipe": ext_pipe,
                       "saved_scope": scope_label(rc["scope"], rc["locale"])})
     history = conn.execute(
         """SELECT j.*, s.name AS sname, s.location AS sloc FROM jobs j
@@ -1404,6 +1405,38 @@ def cancel_job(job_id: int):
 def pipeline_json(source_id: int):
     from .jobs import pipeline_state
     return JSONResponse(pipeline_state(_conn(), source_id))
+
+
+@app.get("/sites/{source_id}/external-pipeline.json")
+def external_pipeline_json(source_id: int):
+    from .jobs import external_pipeline_state
+    return JSONResponse(external_pipeline_state(_conn(), source_id))
+
+
+@app.get("/sites/{source_id}/external-scope.json")
+def external_scope_json(source_id: int):
+    """Pre-run preview + LLM cost estimate for an external check (SCOPE + MATCH both
+    call the LLM, roughly one fast-model pass per page)."""
+    from .config import serp_enabled
+    from .external.brand import get_brand
+    conn = _conn()
+    one = lambda q, *a: conn.execute(q, a).fetchone()["c"]
+    pending = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='pending'", source_id)
+    ok_pages = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='ok'", source_id)
+    candidates = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='candidate'", source_id)
+    brand = get_brand(conn, source_id) or {}
+    # SCOPE + MATCH run the LLM over fetched pages (~fast-model calls); rough per-page cost.
+    pages_scoped = pending + ok_pages
+    per_page = 0.0009  # ~2 fast-model passes (scope + match) per page, haiku pricing
+    est = round(pages_scoped * per_page, 4)
+    return JSONResponse({
+        "brand": brand.get("brand_name") or "",
+        "has_brand": bool(brand.get("brand_name")),
+        "pending_to_fetch": pending, "already_fetched": ok_pages,
+        "discovery_candidates": candidates, "pages_scoped": pages_scoped,
+        "discover_enabled": serp_enabled(),
+        "est_cost_usd": est,
+    })
 
 
 @app.get("/jobs/{job_id}.json")

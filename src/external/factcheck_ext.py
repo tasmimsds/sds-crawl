@@ -26,6 +26,7 @@ async def run_external_factcheck(conn, source_id: int) -> dict:
 
     conn.execute("DELETE FROM external_findings WHERE source_id=? AND kind='factcheck'", (source_id,))
     made = 0
+    positive = unclear = 0  # for the pipeline FACT MATCH stage (✓ / ? counts)
     for rule in rules:
         terms = [t.lower() for t in (rule.get("stale_indicators", []) + rule.get("search_terms", []))]
         correct = rule["current_value"]
@@ -36,7 +37,12 @@ async def run_external_factcheck(conn, source_id: int) -> dict:
         await verdict(conn, cand, correct)  # sets c["verdict"]/["verdict_reason"]
         ft = _FT.get(rule["category"], "false_claim")
         for c in cand:
-            if c.get("verdict") != "mismatch":
+            v = c.get("verdict")
+            if v == "matches":
+                positive += 1
+            elif v == "unclear":
+                unclear += 1
+            if v != "mismatch":
                 continue
             conn.execute(
                 """INSERT INTO external_findings
@@ -50,4 +56,5 @@ async def run_external_factcheck(conn, source_id: int) -> dict:
             )
             made += 1
     conn.commit()
-    return {"rules": len(rules), "brand_snippets": len(snips), "findings": made}
+    return {"rules": len(rules), "brand_snippets": len(snips), "findings": made,
+            "positive": positive, "issue": made, "unclear": unclear}

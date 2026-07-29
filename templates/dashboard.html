@@ -27,6 +27,15 @@
     {% if c.state=='failed' and c.last %}<div class="note err">{{ c.last.message }}</div>{% endif %}
 
     {% set pp = c.pipe %}
+    {% set ep = c.ext_pipe %}
+    {# ---- flow tabs: Internal | External ---- #}
+    <div class="flow-tabs" data-source="{{ c.row.id }}">
+      <button class="flow-tab active" data-flow="internal" onclick="switchFlow({{ c.row.id }},'internal')">Internal</button>
+      <button class="flow-tab" data-flow="external" onclick="switchFlow({{ c.row.id }},'external')">External
+        {% if ep.s5.issues %}<b class="badge-count">{{ ep.s5.issues }}</b>{% endif %}</button>
+    </div>
+
+    <div class="flow-panel" data-flow="internal" data-source="{{ c.row.id }}">
     <div class="pipeline" id="pipe-{{ c.row.id }}" data-source="{{ c.row.id }}"
          data-jobid="{{ pp.job_id or '' }}">
       {# ---- Stage 1: CRAWL ---- #}
@@ -76,6 +85,79 @@
       <button class="btn btn-sm btn-cancel" id="cancel-{{ c.row.id }}" style="{{ '' if c.state=='syncing' else 'display:none' }}"
               onclick="cancelSync({{ c.running.id if c.running else 0 }}, {{ c.row.id }})">Cancel</button>
     </div>
+    </div>{# /internal flow-panel #}
+
+    {# ---- EXTERNAL flow: DISCOVER → FETCH → SCOPE → READ → FACT MATCH ---- #}
+    <div class="flow-panel" data-flow="external" data-source="{{ c.row.id }}" hidden>
+    {% if not ep.has_external and not ep.has_brand %}
+      <div class="ext-empty">
+        <p class="muted">No external sources yet. External fact-check looks at what <b>other</b> websites
+          say about {% if ep.brand %}<b>{{ ep.brand }}</b>{% else %}this project's brand{% endif %}.</p>
+        <a class="btn btn-sm btn-primary" href="/fact-check">Set up External Sources ↗</a>
+      </div>
+    {% else %}
+      <div class="pipeline ext-pipeline" id="extpipe-{{ c.row.id }}" data-source="{{ c.row.id }}"
+           data-jobid="{{ ep.job_id or '' }}">
+        {# 1 DISCOVER #}
+        <div class="pstage st-{{ ep.s1.status }}" data-stage="1" onclick="location.href='/fact-check'">
+          <div class="pstage-head"><span class="pnum">1</span> DISCOVER</div>
+          <div class="pbig" data-k="e1main">{{ ep.s1.ready|comma }} sources</div>
+          <div class="pstatus" data-k="e1status"></div>
+          <div class="psmall" data-k="e1cand">{{ ep.s1.candidates }} candidates to approve</div>
+          <div class="psmall" data-k="e1man">{{ ep.s1.manual }} manual</div>
+        </div>
+        <div class="parrow st-{{ ep.s1.status }}" data-arrow="1"><span>&#9654;</span></div>
+        {# 2 FETCH #}
+        <div class="pstage st-{{ ep.s2.status }}" data-stage="2">
+          <div class="pstage-head"><span class="pnum">2</span> FETCH</div>
+          <div class="pbig" data-k="e2main">{{ ep.s2.ok|comma }} fetched</div>
+          <div class="pstatus" data-k="e2status"></div>
+          <div class="psmall warn" data-k="e2block">{{ ep.s2.blocked }} blocked</div>
+          <div class="psmall" data-k="e2err">{{ ep.s2.errored }} errored</div>
+        </div>
+        <div class="parrow st-{{ ep.s2.status }}" data-arrow="2"><span>&#9654;</span></div>
+        {# 3 SCOPE #}
+        <div class="pstage st-{{ ep.s3.status }}" data-stage="3" onclick="location.href='/results?scope=external'">
+          <div class="pstage-head"><span class="pnum">3</span> SCOPE</div>
+          <div class="pbig" data-k="e3main">{{ ep.s3.kept|comma }} / {{ ep.s3.total|comma }} about brand</div>
+          <div class="pstatus" data-k="e3status"></div>
+          <div class="psmall" data-k="e3disc">{{ ep.s3.discarded }} discarded (competitor/generic)</div>
+        </div>
+        <div class="parrow st-{{ ep.s3.status }}" data-arrow="3"><span>&#9654;</span></div>
+        {# 4 READ #}
+        <div class="pstage st-{{ ep.s4.status }}" data-stage="4">
+          <div class="pstage-head"><span class="pnum">4</span> READ</div>
+          <div class="pbig" data-k="e4main">{{ ep.s4.claims|comma }} claims</div>
+          <div class="pstatus" data-k="e4status"></div>
+          <div class="psmall">about {{ ep.brand or 'the brand' }}</div>
+        </div>
+        <div class="parrow st-{{ ep.s4.status }}" data-arrow="4"><span>&#9654;</span></div>
+        {# 5 FACT MATCH #}
+        <div class="pstage st-{{ ep.s5.status }}" data-stage="5" onclick="location.href='/results?scope=external'">
+          <div class="pstage-head"><span class="pnum">5</span> FACT MATCH</div>
+          <div class="pbig" data-k="e5main">{{ (ep.s5.positive + ep.s5.issues + ep.s5.unclear)|comma }} checked</div>
+          <div class="pstatus" data-k="e5status"></div>
+          <div class="psmall pos" data-k="e5pos">✓ {{ ep.s5.positive|comma }} positive</div>
+          <div class="psmall danger" data-k="e5iss">✗ {{ ep.s5.issues|comma }} issues</div>
+          <div class="psmall warn" data-k="e5unc">? {{ ep.s5.unclear|comma }} unclear</div>
+        </div>
+      </div>
+
+      <div class="pipe-summary" id="extsum-{{ c.row.id }}">
+        {% if ep.last_finished %}Last external check {{ reltime(ep.last_finished) }} —
+          {{ ep.s2.ok|comma }} pages across {{ ep.domains }} domains —
+          <b class="danger">{{ ep.s5.issues|comma }}</b> mention {{ ep.brand or 'the brand' }} with wrong info,
+          <b class="pos">{{ ep.s5.positive|comma }}</b> correct.
+        {% else %}Not checked yet — click <b>Run external check</b>.{% endif %}
+      </div>
+
+      <div class="sync-actions">
+        <button class="btn btn-primary btn-sm" id="extrun-{{ c.row.id }}" onclick="runExternal({{ c.row.id }})">Run external check</button>
+        <a class="btn btn-sm" href="/results?scope=external">View external findings ↗</a>
+        <a class="btn btn-sm" href="/fact-check">External sources</a>
+      </div>
+    {% endif %}
+    </div>{# /external flow-panel #}
 
     <form method="post" action="/sites/{{ c.row.id }}/schedule" class="sched-form">
       <span class="muted small">Auto-sync</span>

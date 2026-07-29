@@ -322,6 +322,19 @@ a.url,.url{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidde
 
 /* ---- Dashboard pipeline flow (CRAWL -> READ -> MATCH) ---- */
 .pipeline{display:flex;align-items:stretch;gap:0;margin:14px 0 6px;flex-wrap:nowrap}
+/* the 5-stage external flow needs to scroll on narrow cards rather than squash */
+.ext-pipeline{overflow-x:auto}
+.ext-pipeline .pstage{min-width:150px}
+/* flow tabs (Internal | External) */
+.flow-tabs{display:flex;gap:4px;margin-top:12px}
+.flow-tab{background:none;border:1px solid var(--border);border-bottom:none;border-radius:8px 8px 0 0;
+  padding:6px 14px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:6px}
+.flow-tab.active{color:var(--primary);border-color:var(--border);background:var(--surface);
+  box-shadow:0 -2px 0 var(--primary) inset}
+.flow-tab .badge-count{position:static;background:var(--critical);color:#fff}
+.flow-panel{border:1px solid var(--border);border-radius:0 10px 10px 10px;padding:6px 12px 12px;margin-bottom:6px}
+.ext-empty{padding:18px 8px;text-align:center}
+.ext-empty p{margin:0 0 12px}
 .pstage{flex:1;min-width:0;border:1px solid var(--border);border-radius:12px;padding:12px 14px;
   cursor:pointer;background:var(--surface);transition:border-color .2s,box-shadow .2s;position:relative}
 .pstage:hover{border-color:var(--accent,#3b82f6);box-shadow:0 2px 10px rgba(16,24,40,.08)}

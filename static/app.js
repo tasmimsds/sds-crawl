@@ -242,7 +242,13 @@ window.pollPipeline = pollPipeline;
 // resume live polling for any pipeline already running on page load
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".pipeline").forEach((pl) => {
-    if (pl.querySelector(".pstage.st-running")) pollPipeline(pl.dataset.source);
+    if (!pl.querySelector(".pstage.st-running")) return;
+    if (pl.classList.contains("ext-pipeline")) {
+      switchFlow(pl.dataset.source, "external");  // surface the active external run
+      pollExternalPipeline(pl.dataset.source);
+    } else {
+      pollPipeline(pl.dataset.source);
+    }
   });
 });
 
@@ -487,8 +493,91 @@ function alertBanner(text) {
   clearTimeout(window._bt); window._bt = setTimeout(() => { b.style.display = "none"; }, 3500);
 }
 
-// ---- external check (discover -> fetch -> scope -> fact-check) ----
-async function runExternal() {
+// ---- dashboard flow tabs: Internal | External ----
+function switchFlow(sid, flow) {
+  document.querySelectorAll(`.flow-panel[data-source="${sid}"]`).forEach((p) => {
+    p.hidden = p.dataset.flow !== flow;
+  });
+  document.querySelectorAll(`.flow-tabs[data-source="${sid}"] .flow-tab`).forEach((t) => {
+    t.classList.toggle("active", t.dataset.flow === flow);
+  });
+}
+window.switchFlow = switchFlow;
+
+// ---- EXTERNAL pipeline: DISCOVER → FETCH → SCOPE → READ → FACT MATCH ----
+function applyExternalPipeline(sid, p) {
+  const root = document.getElementById("extpipe-" + sid);
+  if (!root) return;
+  root.dataset.jobid = p.job_id || "";
+  const stage = (idx, st) => {
+    const el = root.querySelector(`.pstage[data-stage="${idx}"]`);
+    if (el) el.className = "pstage st-" + st;
+    const ar = root.querySelector(`.parrow[data-arrow="${idx}"]`);
+    if (ar) ar.className = "parrow st-" + st;
+  };
+  stage(1, p.s1.status); stage(2, p.s2.status); stage(3, p.s3.status);
+  stage(4, p.s4.status); stage(5, p.s5.status);
+  const set = (k, v) => { const e = root.querySelector(`[data-k="${k}"]`); if (e) e.textContent = v; };
+  set("e1main", `${_fmt(p.s1.ready)} sources`);
+  set("e1cand", `${p.s1.candidates} candidates to approve`);
+  set("e1man", `${p.s1.manual} manual`);
+  set("e2main", `${_fmt(p.s2.ok)} fetched`);
+  set("e2block", `${p.s2.blocked} blocked`);
+  set("e2err", `${p.s2.errored} errored`);
+  set("e3main", `${_fmt(p.s3.kept)} / ${_fmt(p.s3.total)} about brand`);
+  set("e3disc", `${p.s3.discarded} discarded (competitor/generic)`);
+  set("e4main", `${_fmt(p.s4.claims)} claims`);
+  set("e5main", `${_fmt(p.s5.positive + p.s5.issues + p.s5.unclear)} checked`);
+  set("e5pos", `✓ ${_fmt(p.s5.positive)} positive`);
+  set("e5iss", `✗ ${_fmt(p.s5.issues)} issues`);
+  set("e5unc", `? ${_fmt(p.s5.unclear)} unclear`);
+}
+
+async function pollExternalPipeline(sid) {
+  let p;
+  try { p = await (await fetch(`/sites/${sid}/external-pipeline.json`)).json(); }
+  catch (e) { setTimeout(() => pollExternalPipeline(sid), 2500); return; }
+  applyExternalPipeline(sid, p);
+  if (p.running) { setTimeout(() => pollExternalPipeline(sid), 2000); }
+  else { setTimeout(() => location.reload(), 1200); }
+}
+window.pollExternalPipeline = pollExternalPipeline;
+
+// one-click external check (dashboard): cost preview → run → animate stages 1→5
+async function runExternal(sid) {
+  // legacy fact-check page path (no sid) keeps its old behavior
+  if (sid === undefined) return runExternalLegacy();
+  let info;
+  try { info = await (await fetch(`/sites/${sid}/external-scope.json`)).json(); }
+  catch (e) { info = null; }
+  if (info && !info.has_brand && info.pages_scoped === 0) {
+    alert("No brand profile or external sources yet. Add External Sources first (Fact Check page).");
+    return;
+  }
+  if (info) {
+    const lines = [
+      `Run external check for ${info.brand || "this brand"}?`,
+      ``,
+      `• ${info.pending_to_fetch} new page(s) to fetch` +
+        (info.already_fetched ? ` + ${info.already_fetched} already fetched` : ""),
+      info.discover_enabled ? `• web discovery ON (adds candidates to approve)` : `• web discovery off`,
+      `• SCOPE + FACT MATCH use the LLM — est. cost ≈ $${info.est_cost_usd}`,
+    ];
+    if (!confirm(lines.join("\n"))) return;
+  }
+  switchFlow(sid, "external");
+  const btn = document.getElementById("extrun-" + sid);
+  if (btn) { btn.disabled = true; btn.textContent = "Running…"; }
+  const res = await fetch("/external/run", { method: "POST", body: new URLSearchParams({ source_id: sid }) });
+  if (res.status === 409) { const j = await res.json(); alert(j.error); if (btn) { btn.disabled = false; btn.textContent = "Run external check"; } return; }
+  const { error } = await res.json();
+  if (error) { alert(error); if (btn) { btn.disabled = false; btn.textContent = "Run external check"; } return; }
+  pollExternalPipeline(sid);
+}
+window.runExternal = runExternal;
+
+// legacy fact-check-page runner (uses ext-prog/ext-fill/ext-msg elements)
+async function runExternalLegacy() {
   const prog = document.getElementById("ext-prog");
   const fill = document.getElementById("ext-fill");
   const msg = document.getElementById("ext-msg");
@@ -507,7 +596,6 @@ async function runExternal() {
   };
   poll();
 }
-window.runExternal = runExternal;
 
 async function cancelSync(jobId, sourceId) {
   if (!jobId) return;
