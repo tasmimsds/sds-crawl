@@ -518,6 +518,74 @@ async def external_recheck(fid: int):
 
 
 # ---- General Facts (external brand info that doesn't map to a defined fact) ----
+# ---- Schema Checker & Suggestion Engine ----
+_last_schema_batch: dict = {}
+
+
+@app.get("/schema", response_class=HTMLResponse)
+def schema_page(request: Request):
+    from .schema_checker import google_rules, vocab
+    v = vocab.load()
+    return render(request, "schema_checker.html", "schema",
+                  {"batch": None, "vocab_types": len(v.types), "vocab_props": len(v.properties),
+                   "vocab_fetched": v.fetched_at, "ruleset": google_rules.RULESET["version"],
+                   "features": sorted(google_rules.RULESET["features"])})
+
+
+@app.post("/schema/check", response_class=HTMLResponse)
+async def schema_check(request: Request, mode: str = Form("url"), url: str = Form(""),
+                       snippet: str = Form("")):
+    from .schema_checker import google_rules, service, vocab
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    sid = active_src["id"] if active_src else None
+    if mode == "snippet" and snippet.strip():
+        batch = {"results": [await run_in_threadpool(service.check_snippet, snippet)], "count": 1,
+                 "cross_page_org": [], "ruleset_version": google_rules.RULESET["version"]}
+    else:
+        urls = await run_in_threadpool(service.expand_sitemap, url.strip()) if url.strip().endswith(".xml") \
+            else [url.strip()]
+        urls = [u for u in urls if u][:50]
+        batch = await run_in_threadpool(service.check_batch, conn, urls, sid)
+    _last_schema_batch[sid or 0] = batch
+    v = vocab.load()
+    return render(request, "schema_checker.html", "schema",
+                  {"batch": batch, "single": batch["results"][0] if batch["count"] == 1 else None,
+                   "vocab_types": len(v.types), "vocab_props": len(v.properties),
+                   "vocab_fetched": v.fetched_at, "ruleset": google_rules.RULESET["version"],
+                   "features": sorted(google_rules.RULESET["features"])})
+
+
+@app.get("/schema/export.xlsx")
+def schema_export_xlsx(request: Request):
+    from .schema_checker.report import build_xlsx
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    batch = _last_schema_batch.get(active_src["id"] if active_src else 0)
+    if not batch:
+        return JSONResponse({"error": "run a check first"}, status_code=400)
+    return _xlsx_response(build_xlsx(batch), "schema_check")
+
+
+@app.get("/schema/export.json")
+def schema_export_json(request: Request):
+    from fastapi.responses import Response
+    from .schema_checker.report import build_json
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    batch = _last_schema_batch.get(active_src["id"] if active_src else 0)
+    if not batch:
+        return JSONResponse({"error": "run a check first"}, status_code=400)
+    return Response(build_json(batch), media_type="application/json",
+                    headers={"content-disposition": "attachment; filename=schema_check.json"})
+
+
+@app.post("/schema/refresh-vocab")
+async def schema_refresh_vocab():
+    from .schema_checker import vocab
+    return JSONResponse(await run_in_threadpool(vocab.refresh, True))
+
+
 @app.get("/general-facts", response_class=HTMLResponse)
 def general_facts_page(request: Request):
     conn = _conn()

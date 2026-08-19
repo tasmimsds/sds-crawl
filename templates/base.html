@@ -10,7 +10,7 @@
   <link rel="manifest" href="/static/site.webmanifest" />
   <meta name="apple-mobile-web-app-title" content="ExactFact Checker" />
   <meta name="theme-color" content="#626DF9" />
-  <link rel="stylesheet" href="/static/app.css?v=29" />
+  <link rel="stylesheet" href="/static/app.css?v=30" />
 </head>
 <body>
 <div class="layout">
@@ -45,6 +45,7 @@
       <a href="/results" class="{{ 'active' if active=='results' }}"><i>▤</i><span>Results &amp; Issues</span>
         {% if nav.open_issues %}<b class="badge-count">{{ nav.open_issues }}</b>{% endif %}</a>
       <a href="/general-facts" class="{{ 'active' if active=='general' }}"><i>📋</i><span>General Facts</span></a>
+      <a href="/schema" class="{{ 'active' if active=='schema' }}"><i>◆</i><span>Schema Checker</span></a>
       <a href="/facts" class="{{ 'active' if active=='facts' }}"><i>☰</i><span>Facts Library</span></a>
 
       <div class="grp">System</div>
@@ -66,8 +67,8 @@
     <footer class="app-footer muted small">ExactFact Checker <span>by SDS Manager</span></footer>
   </main>
 </div>
-<script src="/static/filter-builder.js?v=29"></script>
-<script src="/static/app.js?v=29"></script>
+<script src="/static/filter-builder.js?v=30"></script>
+<script src="/static/app.js?v=30"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>
