@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Schema Audit — ExactFact Checker{% endblock %}
+{% block content %}
+<div class="head-row">
+  <div class="titles">
+    <h1>Schema Audit &amp; Suggestions</h1>
+    <p class="muted">Extract structured data, validate it, and get recommended schema + ready-to-paste
+      JSON-LD. Scoped to this project{% if domain %}: <b>{{ domain }}</b>{% endif %} — other domains need their own project.</p>
+  </div>
+  <div class="head-actions">
+    <span class="muted small">{{ vocab_types }} schema.org types · ruleset {{ ruleset }}</span>
+    {% if recent %}<a class="btn btn-sm" href="/schema/export.xlsx">⭳ Excel</a>{% endif %}
+  </div>
+</div>
+
+{% if not domain %}
+<div class="card empty"><p class="muted">No active project. Add or switch to a website first.</p>
+  <a class="btn btn-primary btn-sm" href="/add-site">+ Add Website</a></div>
+{% else %}
+
+{# ---- input modes ---- #}
+<div class="card">
+  <div class="tabs">
+    <a class="tab active" href="#" onclick="scTab(event,'bulk')">Bulk URL import</a>
+    <a class="tab" href="#" onclick="scTab(event,'sitemap')">Website → auto-detect sitemap</a>
+  </div>
+  <div id="pane-bulk">
+    <form method="post" action="/schema/import" enctype="multipart/form-data">
+      <textarea name="urls" rows="5" class="gf-note" style="font-family:ui-monospace,monospace"
+        placeholder="One URL per line (must be on {{ domain }}). Optional: add current schema after a TAB to diff it against the live page."></textarea>
+      <div class="head-actions" style="margin-top:8px">
+        <label class="btn btn-sm">Choose file<input type="file" name="file" accept=".txt,.csv,.xlsx" hidden onchange="this.form.requestSubmit()"></label>
+        <span class="muted small">.txt / .csv / .xlsx (col 1 = URL, optional col 2 = current schema)</span>
+        <button class="btn btn-primary btn-sm" type="submit" style="margin-left:auto">Import &amp; scope-check</button>
+      </div>
+    </form>
+  </div>
+  <div id="pane-sitemap" hidden>
+    <form method="post" action="/schema/discover">
+      <div class="query-row">
+        <input class="query-input" name="address" placeholder="{{ domain }}  (auto-detects robots.txt + common sitemap paths)" />
+        <button class="btn btn-primary" type="submit">Discover sitemap</button>
+      </div>
+      <p class="muted small">Discovery lists the in-scope URLs — nothing is scraped until you select and confirm.</p>
+    </form>
+    {% if discover_error %}<div class="note err">{{ discover_error }}</div>{% endif %}
+  </div>
+</div>
+
+{# ---- staged selection (from import or discover) ---- #}
+{% if pending and pending.urls %}
+<div class="card">
+  <div class="head-actions" style="justify-content:space-between">
+    <h3 class="section-h" style="margin:0">{{ pending.urls|length }} in-scope URL(s) — select to audit</h3>
+    <span class="muted small">Nothing is audited until you click <b>Audit Selected</b>.</span>
+  </div>
+  <form method="post" action="/schema/audit" id="sc-audit-form">
+    <div class="filters" style="flex-wrap:wrap;gap:8px;align-items:center">
+      <label class="muted small"><input type="checkbox" id="sc-all" checked onchange="scAll(this)"> Select all</label>
+      {% if pending.sections %}
+      <select onchange="scFilterSection(this.value)" class="btn-sm">
+        <option value="">All sections</option>
+        {% for s in pending.sections %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+      </select>{% endif %}
+      <span class="muted small" id="sc-count"></span>
+      <button class="btn btn-primary btn-sm" type="submit" style="margin-left:auto">Audit Selected</button>
+    </div>
+    <div class="table-card" style="max-height:340px;overflow:auto">
+      <table class="tbl"><tbody>
+      {% for u in pending.urls %}
+        <tr data-section="{{ (u|schema_section) }}">
+          <td style="width:1%"><input type="checkbox" name="urls" value="{{ u }}" class="sc-cb" checked onchange="scCount()"></td>
+          <td><a class="url" href="{{ u }}" target="_blank" title="{{ u }}">{{ u|short_url }}</a></td>
+          <td class="muted small">{{ (u|schema_section) }}{% if pending.current.get(u) %} · <span class="pill">has current schema</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody></table>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+{# ---- rejected out-of-scope (always separate + clear) ---- #}
+{% set rej = rejected if rejected else (pending.rejected if pending else None) %}
+{% if rej %}
+<div class="card">
+  <h3 class="section-h">⚠ Rejected — out of scope for {{ domain }} ({{ rej|length }})</h3>
+  <p class="muted small">These belong to a different domain and were not audited. Create a new project to check them.</p>
+  <div class="table-card"><table class="tbl"><thead><tr><th>URL</th><th>Reason</th></tr></thead><tbody>
+    {% for r in rej %}<tr><td class="muted small">{{ r.url }}</td><td class="muted small">{{ r.reason }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</div>
+{% endif %}
+
+{# ---- audit run log ---- #}
+{% if log %}
+<div class="card">
+  <h3 class="section-h">Audit log — {{ audited }} audited</h3>
+  {% for e in log %}<div class="sc-log {{ 'ok' if e.ok else 'bad' }}">{{ '✓' if e.ok else '✗' }} <span class="url">{{ e.url|short_url }}</span> — {{ e.message }}</div>{% endfor %}
+</div>
+{% endif %}
+
+{# ---- audit results ---- #}
+{% if results %}
+{% for r in results %}
+<div class="card">
+  <div class="head-actions" style="justify-content:space-between">
+    <div><a class="url" href="{{ r.url }}" target="_blank">{{ r.url|short_url }}</a>
+      <span class="pill pill-blog">{{ r.intent }}</span>
+      <span class="badge sev-{{ 'critical' if r.status=='errors' else 'medium' if r.status=='warnings' else 'low' }}">{{ r.status }}</span>
+      <span class="badge sev-{{ 'critical' if r.priority=='HIGH' else 'medium' if r.priority=='MEDIUM' else 'low' }}">{{ r.priority }}</span></div>
+    <span class="muted small">V {{ r.validity }} · C {{ r.coverage }} · {{ r.block_count }} block(s) · {{ r.formats|join('+') or 'none' }}</span>
+  </div>
+  <div class="muted small"><b>Detected:</b> {{ r.detected_types|join(', ') or 'none found' }}</div>
+  {% if r.recommended_types %}<div class="muted small"><b>Recommended:</b> {{ r.recommended_types|join(', ') }}</div>{% endif %}
+  {% if r.missing_props %}<div class="muted small"><b>Missing props:</b> {{ r.missing_props|join(', ') }}</div>{% endif %}
+  {% if r.diff %}<div class="note" style="background:#eef2ff;border:1px solid #c9d2f5;border-radius:8px;padding:6px 10px;margin-top:6px">
+    <b>Current vs live/recommended diff:</b>
+    supplied {{ r.diff.supplied_types|join(', ') or '—' }};
+    on page but not supplied: {{ r.diff.drift_on_page_not_supplied|join(', ') or '—' }};
+    still missing: {{ r.diff.still_missing_recommended|join(', ') or '—' }}</div>{% endif %}
+  <details style="margin-top:8px"><summary class="linklike small">Generated JSON-LD</summary>
+    <pre class="sc-code">{{ r.snippet }}</pre></details>
+</div>
+{% endfor %}
+{% endif %}
+
+{# ---- recent stored audits ---- #}
+{% if recent and not results %}
+<h2 class="section-h">Recent audits ({{ recent|length }})</h2>
+<div class="card table-card">
+  <table class="tbl">
+    <thead><tr><th>URL</th><th>Current Type(s)</th><th>Format</th><th>Status</th><th>Recommended</th><th>Missing props</th><th>Priority</th></tr></thead>
+    <tbody>
+    {% for r in recent %}
+      <tr>
+        <td><a class="url" href="{{ r.url }}" target="_blank" title="{{ r.url }}">{{ r.url|short_url }}</a></td>
+        <td class="muted small">{{ r.types|join(', ') or '(none)' }}</td>
+        <td>{{ r.format }}</td>
+        <td><span class="badge sev-{{ 'critical' if r.status=='errors' else 'medium' if r.status=='warnings' else 'low' }}">{{ r.status }}</span></td>
+        <td class="muted small">{{ r.recommended_types|join(', ') or '—' }}</td>
+        <td class="muted small">{{ r.missing_props|join(', ')|truncate(50,True,'…') or '—' }}</td>
+        <td><span class="badge sev-{{ 'critical' if r.priority=='HIGH' else 'medium' if r.priority=='MEDIUM' else 'low' }}">{{ r.priority }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endif %}
+
+<style>
+.sc-log{font-size:13px;padding:3px 8px;border-radius:6px;margin:2px 0}
+.sc-log.ok{background:#e7f7ee;color:#0a7d3f} .sc-log.bad{background:#fdecee;color:#b42318}
+.sc-code{background:#0f1115;color:#cdd6e4;padding:12px 14px;border-radius:8px;overflow:auto;max-height:320px;font-size:12px;white-space:pre}
+</style>
+<script>
+function scTab(e,m){e.preventDefault();document.getElementById('pane-bulk').hidden=(m!=='bulk');
+  document.getElementById('pane-sitemap').hidden=(m!=='sitemap');
+  e.currentTarget.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));e.currentTarget.classList.add('active');}
+function scAll(cb){document.querySelectorAll('.sc-cb').forEach(c=>{if(c.closest('tr').style.display!=='none')c.checked=cb.checked});scCount();}
+function scFilterSection(s){document.querySelectorAll('#sc-audit-form tbody tr').forEach(tr=>{
+  const show=!s||tr.dataset.section===s;tr.style.display=show?'':'none';tr.querySelector('.sc-cb').checked=show&&document.getElementById('sc-all').checked;});scCount();}
+function scCount(){const n=[...document.querySelectorAll('.sc-cb')].filter(c=>c.checked).length;
+  const el=document.getElementById('sc-count');if(el)el.textContent=n+' selected';}
+document.addEventListener('DOMContentLoaded',scCount);
+</script>
+{% endblock %}

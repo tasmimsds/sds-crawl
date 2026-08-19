@@ -97,6 +97,91 @@ def _largest_block(tree):
     return best
 
 
+def _ld_types(node) -> list[str]:
+    t = node.get("@type") if isinstance(node, dict) else None
+    if not t:
+        return []
+    return [str(x).split("/")[-1].split(":")[-1] for x in (t if isinstance(t, list) else [t])]
+
+
+def _ld_walk(obj, out: list, path: str) -> None:
+    """Collect every typed JSON-LD node (flattens @graph + nested entities)."""
+    if isinstance(obj, list):
+        for i, v in enumerate(obj):
+            _ld_walk(v, out, f"{path}[{i}]")
+        return
+    if not isinstance(obj, dict):
+        return
+    if "@graph" in obj:
+        _ld_walk(obj["@graph"], out, f"{path}.@graph")
+    if obj.get("@type"):
+        props = {k: v for k, v in obj.items() if not k.startswith("@")}
+        out.append({"path": path, "types": _ld_types(obj), "props": sorted(props),
+                    "node": obj})
+    for k, v in obj.items():
+        if k not in ("@type", "@graph") and isinstance(v, (list, dict)):
+            _ld_walk(v, out, f"{path}.{k}")
+
+
+def structured_data(html: str) -> dict:
+    """ALL structured-data blocks on a page — JSON-LD (first-class), microdata
+    (itemscope/itemtype), and RDFa (typeof/property). Per block: @type(s), key
+    properties, format, and parse validity. Exhaustive: reports every type, not only
+    rich-result-eligible ones. Used by the Schema Checker audit engine.
+    """
+    tree = HTMLParser(html or "")
+    blocks: list[dict] = []
+    nodes: list[dict] = []
+    parse_errors: list[dict] = []
+
+    # 1) JSON-LD
+    for i, script in enumerate(tree.css('script[type="application/ld+json"]')):
+        raw = (script.text() or "").strip()
+        rec = {"index": i, "format": "json-ld", "raw": raw, "valid": True, "error": None,
+               "types": [], "props": []}
+        try:
+            parsed = json.loads(raw)
+            before = len(nodes)
+            _ld_walk(parsed, nodes, f"jsonld[{i}]")
+            for n in nodes[before:]:
+                n["format"] = "json-ld"
+            rec["types"] = sorted({t for n in nodes[before:] for t in n["types"]})
+            rec["props"] = sorted({p for n in nodes[before:] for p in n["props"]})
+        except (json.JSONDecodeError, ValueError) as exc:
+            rec["valid"] = False
+            rec["error"] = f"JSON parse error: {exc}"
+            parse_errors.append({"block": i, "format": "json-ld", "message": rec["error"]})
+        blocks.append(rec)
+
+    # 2) Microdata (itemscope/itemtype/itemprop)
+    for j, scope in enumerate(tree.css("[itemscope][itemtype]")):
+        itemtype = scope.attributes.get("itemtype") or ""
+        types = [t.split("/")[-1] for t in itemtype.split() if t]
+        props = sorted({p.attributes.get("itemprop") for p in scope.css("[itemprop]")
+                        if p.attributes.get("itemprop")})
+        node = {"path": f"microdata[{j}]", "types": types, "props": props,
+                "format": "microdata", "node": {"@type": types}}
+        nodes.append(node)
+        blocks.append({"index": j, "format": "microdata", "raw": itemtype, "valid": True,
+                       "error": None, "types": types, "props": props})
+
+    # 3) RDFa (typeof/property/vocab)
+    for k, el in enumerate(tree.css("[typeof]")):
+        types = [t.split("/")[-1].split(":")[-1] for t in (el.attributes.get("typeof") or "").split() if t]
+        props = sorted({p.attributes.get("property", "").split(":")[-1]
+                        for p in el.css("[property]") if p.attributes.get("property")})
+        node = {"path": f"rdfa[{k}]", "types": types, "props": props,
+                "format": "rdfa", "node": {"@type": types}}
+        nodes.append(node)
+        blocks.append({"index": k, "format": "rdfa", "raw": el.attributes.get("typeof") or "",
+                       "valid": True, "error": None, "types": types, "props": props})
+
+    types = sorted({t for n in nodes for t in n["types"]})
+    formats = sorted({b["format"] for b in blocks})
+    return {"blocks": blocks, "nodes": nodes, "types": types, "formats": formats,
+            "block_count": len(blocks), "parse_errors": parse_errors}
+
+
 def extract_paragraph(html: str, needle: str, max_chars: int = 1200) -> str:
     """Full paragraph (block element) containing `needle` — the surrounding context of
     a backlink anchor or a brand mention. Prefers the smallest block (<p>/<li>/<td>/

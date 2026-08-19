@@ -323,6 +323,25 @@ CREATE TABLE IF NOT EXISTS general_facts (
 );
 CREATE INDEX IF NOT EXISTS idx_genfact_source ON general_facts(source_id);
 
+-- Schema (structured-data) audit results, one row per audited URL, scoped to a project.
+CREATE TABLE IF NOT EXISTS page_schema (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER REFERENCES sources(id),
+    url_id INTEGER REFERENCES urls(id),
+    url TEXT,
+    format TEXT,                      -- json-ld | microdata | rdfa | none | mixed
+    types_json TEXT,                  -- detected @type(s)
+    props_json TEXT,                  -- detected properties
+    status TEXT,                      -- valid | warnings | errors | none
+    errors_json TEXT,                 -- schema.org + Google findings
+    recommended_json TEXT,            -- {types, missing_props, priority, snippet, diff}
+    current_schema TEXT,              -- user-supplied current schema (bulk mode), for diff
+    priority TEXT,
+    created_at TEXT,
+    UNIQUE(source_id, url_id)
+);
+CREATE INDEX IF NOT EXISTS idx_page_schema_source ON page_schema(source_id);
+
 -- Per-website auto-sync schedule.
 CREATE TABLE IF NOT EXISTS schedules (
     id INTEGER PRIMARY KEY,

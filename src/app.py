@@ -16,6 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from .config import PROJECT_ROOT, openrouter_key, resolve_path, settings
 from .db import connect, get_products, source_domain
 from .ingest import add_and_ingest
+from .util import parse_locale_section
 from .jobs import create_job, get_job, needs_sync, run_crawl_job, run_sync_job
 
 app = FastAPI(title="SDS Fact Check")
@@ -175,6 +176,7 @@ templates.env.filters["pretty_title"] = _pretty_title
 templates.env.filters["comma"] = _comma
 templates.env.filters["highlight_match"] = _highlight_match
 templates.env.filters["highlight_external"] = _highlight_external
+templates.env.filters["schema_section"] = lambda u: (parse_locale_section(u)[1] or "(root)")
 
 FACT_CATS = ("database_size", "positioning", "free_claim", "language_count",
              "region_count", "regulation_count", "feature_claim", "faq", "other_mismatch")
@@ -518,72 +520,103 @@ async def external_recheck(fid: int):
 
 
 # ---- General Facts (external brand info that doesn't map to a defined fact) ----
-# ---- Schema Checker & Suggestion Engine ----
-_last_schema_batch: dict = {}
+# ---- Schema (structured-data) audit — scoped to the active project ----
+_schema_pending: dict = {}   # source_id -> {"urls": [...], "current": {url: schema}, "rejected": [...]}
+
+
+def _schema_ctx(request, conn, sid, **extra):
+    from .analysis import schema_audit
+    from .schema_checker import google_rules, vocab
+    v = vocab.load()
+    ctx = {"domain": schema_audit.scope_domain(conn, sid) if sid else None,
+           "pending": _schema_pending.get(sid or 0),
+           "recent": schema_audit.recent(conn, sid) if sid else [],
+           "vocab_types": len(v.types), "ruleset": google_rules.RULESET["version"],
+           "results": None, "log": None, "rejected": None}
+    ctx.update(extra)
+    return render(request, "schema.html", "schema", ctx)
 
 
 @app.get("/schema", response_class=HTMLResponse)
 def schema_page(request: Request):
-    from .schema_checker import google_rules, vocab
-    v = vocab.load()
-    return render(request, "schema_checker.html", "schema",
-                  {"batch": None, "vocab_types": len(v.types), "vocab_props": len(v.properties),
-                   "vocab_fetched": v.fetched_at, "ruleset": google_rules.RULESET["version"],
-                   "features": sorted(google_rules.RULESET["features"])})
-
-
-@app.post("/schema/check", response_class=HTMLResponse)
-async def schema_check(request: Request, mode: str = Form("url"), url: str = Form(""),
-                       snippet: str = Form("")):
-    from .schema_checker import google_rules, service, vocab
     conn = _conn()
     active_src, _ = _active_source(request, conn)
-    sid = active_src["id"] if active_src else None
-    if mode == "snippet" and snippet.strip():
-        batch = {"results": [await run_in_threadpool(service.check_snippet, snippet)], "count": 1,
-                 "cross_page_org": [], "ruleset_version": google_rules.RULESET["version"]}
-    else:
-        urls = await run_in_threadpool(service.expand_sitemap, url.strip()) if url.strip().endswith(".xml") \
-            else [url.strip()]
-        urls = [u for u in urls if u][:50]
-        batch = await run_in_threadpool(service.check_batch, conn, urls, sid)
-    _last_schema_batch[sid or 0] = batch
-    v = vocab.load()
-    return render(request, "schema_checker.html", "schema",
-                  {"batch": batch, "single": batch["results"][0] if batch["count"] == 1 else None,
-                   "vocab_types": len(v.types), "vocab_props": len(v.properties),
-                   "vocab_fetched": v.fetched_at, "ruleset": google_rules.RULESET["version"],
-                   "features": sorted(google_rules.RULESET["features"])})
+    return _schema_ctx(request, conn, active_src["id"] if active_src else None)
+
+
+@app.post("/schema/import", response_class=HTMLResponse)
+async def schema_import(request: Request, urls: str = Form(""), file: UploadFile | None = File(None)):
+    """Bulk mode: paste + upload (txt/csv/xlsx, optional current-schema column). Scope-filters
+    and stages the in-scope URLs for review — does NOT audit until 'Audit Selected'."""
+    from .analysis import schema_audit
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return _schema_ctx(request, conn, None)
+    sid = active_src["id"]
+    rows = schema_audit.read_rows_from_text(urls)
+    if file is not None and file.filename:
+        tmp = resolve_path("data/uploads"); tmp.mkdir(parents=True, exist_ok=True)
+        dest = tmp / file.filename
+        dest.write_bytes(await file.read())
+        rows += schema_audit.read_rows_from_file(str(dest))
+    domain = schema_audit.scope_domain(conn, sid)
+    keep, rejected = schema_audit.scope_filter([u for u, _ in rows], domain)
+    current = {u: c for u, c in rows if c and u in set(keep)}
+    _schema_pending[sid] = {"urls": keep, "current": current,
+                            "rejected": [{"url": u, "reason": why} for u, why in rejected],
+                            "sections": sorted({(parse_locale_section(u)[1] or "(root)") for u in keep})}
+    return _schema_ctx(request, conn, sid)
+
+
+@app.post("/schema/discover", response_class=HTMLResponse)
+async def schema_discover(request: Request, address: str = Form("")):
+    """Sitemap mode: auto-detect the project's sitemap → stage in-scope URLs for MANUAL
+    selection. Never scrapes here."""
+    from .analysis import schema_audit
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return _schema_ctx(request, conn, None)
+    sid = active_src["id"]
+    disc = await run_in_threadpool(schema_audit.discover_urls, conn, sid, address.strip())
+    if disc.get("error"):
+        return _schema_ctx(request, conn, sid, discover_error=disc["error"])
+    _schema_pending[sid] = {"urls": disc["in_scope"], "current": {},
+                            "rejected": [{"url": u, "reason": why} for u, why in disc["rejected"]],
+                            "sections": disc["sections"], "sitemap_found": disc["sitemap_found"]}
+    return _schema_ctx(request, conn, sid, discover_error=None if disc["sitemap_found"]
+                       else "No sitemap found — paste URLs in Bulk import instead.")
+
+
+@app.post("/schema/audit", response_class=HTMLResponse)
+async def schema_audit_run(request: Request):
+    """Audit ONLY the URLs the user explicitly selected (checkboxes). Scope-checked again."""
+    from .analysis import schema_audit
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return _schema_ctx(request, conn, None)
+    sid = active_src["id"]
+    form = await request.form()
+    selected = form.getlist("urls")
+    pend = _schema_pending.get(sid, {})
+    cur = pend.get("current", {})
+    rows = [(u, cur.get(u)) for u in selected]
+    out = await run_in_threadpool(schema_audit.run_audit, conn, sid, rows)
+    return _schema_ctx(request, conn, sid, results=out["results"], log=out["log"],
+                       rejected=out["rejected"], audited=out["audited"])
 
 
 @app.get("/schema/export.xlsx")
 def schema_export_xlsx(request: Request):
-    from .schema_checker.report import build_xlsx
+    from .report.xlsx_export import build_schema_xlsx
     conn = _conn()
     active_src, _ = _active_source(request, conn)
-    batch = _last_schema_batch.get(active_src["id"] if active_src else 0)
-    if not batch:
-        return JSONResponse({"error": "run a check first"}, status_code=400)
-    return _xlsx_response(build_xlsx(batch), "schema_check")
-
-
-@app.get("/schema/export.json")
-def schema_export_json(request: Request):
-    from fastapi.responses import Response
-    from .schema_checker.report import build_json
-    conn = _conn()
-    active_src, _ = _active_source(request, conn)
-    batch = _last_schema_batch.get(active_src["id"] if active_src else 0)
-    if not batch:
-        return JSONResponse({"error": "run a check first"}, status_code=400)
-    return Response(build_json(batch), media_type="application/json",
-                    headers={"content-disposition": "attachment; filename=schema_check.json"})
-
-
-@app.post("/schema/refresh-vocab")
-async def schema_refresh_vocab():
-    from .schema_checker import vocab
-    return JSONResponse(await run_in_threadpool(vocab.refresh, True))
+    if not active_src:
+        return JSONResponse({"error": "no site"}, status_code=400)
+    from .analysis import schema_audit
+    return _xlsx_response(build_schema_xlsx(schema_audit.recent(conn, active_src["id"])), "schema_audit")
 
 
 @app.get("/general-facts", response_class=HTMLResponse)

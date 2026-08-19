@@ -1,6 +1,7 @@
 """One-time (idempotent) migration to the fact-checking product data model.
 
-- adds new tables (via connect()/SCHEMA): fact_rules, feature_entries, queries, jobs
+- adds new tables (via connect()/SCHEMA): fact_rules, feature_entries, queries, jobs,
+  page_schema (structured-data audit results)
 - adds issues.query_id to existing DBs
 - builds + backfills the FTS5 index from existing crawl data (no re-crawl)
 - imports config/facts.yaml + config/features.yaml into the new tables

@@ -152,6 +152,29 @@ def build_rows_xlsx(rows, ext_rows) -> bytes:
     return _save(wb)
 
 
+SCHEMA_COLS = ["URL", "Section", "Current Type(s)", "Format", "Status", "Recommended Type(s)",
+               "Missing Props", "Priority", "Generated Snippet"]
+
+
+def build_schema_xlsx(rows: list[dict]) -> bytes:
+    """Schema audit export — filterable/sortable by Status, Priority, Section (autofilter)."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Schema audit"
+    data = [{
+        "URL": r["url"], "Section": r.get("section", ""),
+        "Current Type(s)": ", ".join(r.get("types", [])) or "(none found)",
+        "Format": r.get("format", ""), "Status": r.get("status", ""),
+        "Recommended Type(s)": ", ".join(r.get("recommended_types", [])),
+        "Missing Props": ", ".join(r.get("missing_props", [])),
+        "Priority": r.get("priority", ""), "Generated Snippet": r.get("snippet", ""),
+    } for r in rows]
+    _WRAP_COLS.update({"URL", "Generated Snippet", "Missing Props", "Recommended Type(s)", "Current Type(s)"})
+    _write_sheet(ws, f"Schema (structured-data) audit — {len(data)} URLs", SCHEMA_COLS, data)
+    return _save(wb)
+
+
 def build_external_items_xlsx(conn, source_id: int, aliases=None) -> bytes:
     wb = Workbook()
     ws = wb.active
