@@ -84,9 +84,16 @@ def add_external_urls(conn, source_id: int, urls: list[str], source_type: str = 
 
 async def crawl_external_pages(conn, source_id: int, only_pending: bool = False,
                                on_progress=None) -> dict:
-    """Fetch external pages, extract title/text; record blocked/error plainly."""
+    """Fetch external pages, extract title/text; record blocked/error plainly. For
+    backlink/mention pages, also extract the full PARAGRAPH around the anchor (linked)
+    or the brand name (unlinked) so every external item has real surrounding context."""
+    from ..extractor import extract_paragraph
     c = settings()["crawl"]
-    q = "SELECT id, url FROM external_pages WHERE source_id=?"
+    brand = ensure_brand_profile(conn, source_id)
+    brand_terms = [brand["brand_name"], *brand.get("aliases", [])]
+    _MIN_CTX = 80
+    q = ("SELECT id, url, source_type, mention_type, anchor_text, context_paragraph "
+         "FROM external_pages WHERE source_id=?")
     if only_pending:
         q += " AND fetch_status='pending'"
     rows = conn.execute(q, (source_id,)).fetchall()
@@ -97,6 +104,7 @@ async def crawl_external_pages(conn, source_id: int, only_pending: bool = False,
                                  headers=_HEADERS) as client:
         for i, r in enumerate(rows):
             status, err, title, text = "error", None, None, None
+            para = r["context_paragraph"] or ""
             try:
                 resp = await client.get(r["url"])
                 if resp.status_code in (401, 403, 429, 503):
@@ -108,12 +116,24 @@ async def crawl_external_pages(conn, source_id: int, only_pending: bool = False,
                 else:
                     ex = extract(resp.text)
                     status, title, text = "ok", ex.title, ex.body_text
+                    # enrich context paragraph if thin (or missing)
+                    if r["source_type"] in ("backlink", "mention") and len(para) < _MIN_CTX:
+                        needle = r["anchor_text"] if r["mention_type"] == "linked" else None
+                        candidates = [needle] if needle else []
+                        candidates += brand_terms  # fall back to brand name / aliases
+                        for n in candidates:
+                            p = extract_paragraph(resp.text, n or "")
+                            if p and len(p) >= _MIN_CTX:
+                                para = p
+                                break
+                        else:
+                            para = para or (candidates and extract_paragraph(resp.text, candidates[0])) or para
             except Exception as exc:  # noqa: BLE001
                 status, err = "error", f"Could not reach the page ({type(exc).__name__})."
             conn.execute(
                 """UPDATE external_pages SET fetch_status=?, fetch_error=?, fetched_at=?,
-                     title=?, text=? WHERE id=?""",
-                (status, err, now_iso(), title, text, r["id"]),
+                     title=?, text=?, context_paragraph=? WHERE id=?""",
+                (status, err, now_iso(), title, text, para or None, r["id"]),
             )
             conn.commit()
             ok += status == "ok"

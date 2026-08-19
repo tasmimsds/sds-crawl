@@ -518,19 +518,20 @@ function applyExternalPipeline(sid, p) {
   stage(1, p.s1.status); stage(2, p.s2.status); stage(3, p.s3.status);
   stage(4, p.s4.status); stage(5, p.s5.status);
   const set = (k, v) => { const e = root.querySelector(`[data-k="${k}"]`); if (e) e.textContent = v; };
-  set("e1main", `${_fmt(p.s1.ready)} sources`);
-  set("e1cand", `${p.s1.candidates} candidates to approve`);
-  set("e1man", `${p.s1.manual} manual`);
+  set("e1main", `${_fmt(p.s1.total)} sources`);
+  set("e1bl", `🔗 ${_fmt(p.s1.true_backlinks)} backlinks · ${_fmt(p.s1.true_domains)} domains`);
+  set("e1men", `💬 ${_fmt(p.s1.search_mentions)} search mentions · ${_fmt(p.s1.linked)} linked / ${_fmt(p.s1.unlinked)} unlinked`);
+  set("e1def", p.s1.deferred ? `⏸ ${_fmt(p.s1.deferred)} deferred (over cap)` : "");
   set("e2main", `${_fmt(p.s2.ok)} fetched`);
   set("e2block", `${p.s2.blocked} blocked`);
   set("e2err", `${p.s2.errored} errored`);
   set("e3main", `${_fmt(p.s3.kept)} / ${_fmt(p.s3.total)} about brand`);
   set("e3disc", `${p.s3.discarded} discarded (competitor/generic)`);
   set("e4main", `${_fmt(p.s4.claims)} claims`);
-  set("e5main", `${_fmt(p.s5.positive + p.s5.issues + p.s5.unclear)} checked`);
-  set("e5pos", `✓ ${_fmt(p.s5.positive)} positive`);
-  set("e5iss", `✗ ${_fmt(p.s5.issues)} issues`);
-  set("e5unc", `? ${_fmt(p.s5.unclear)} unclear`);
+  set("e5main", `${_fmt(p.s5.positive + p.s5.issues + p.s5.unclear + (p.s5.general || 0))} sorted`);
+  set("e5iss", `✗ ${_fmt(p.s5.issues)} mismatch → Issues`);
+  set("e5pos", `✓ ${_fmt(p.s5.positive)} correct`);
+  set("e5gen", `📋 ${_fmt(p.s5.general || 0)} general facts`);
 }
 
 async function pollExternalPipeline(sid) {
@@ -596,6 +597,52 @@ async function runExternalLegacy() {
   };
   poll();
 }
+
+// ---- General Facts review actions ----
+function gfTab(ev, which) {
+  ev.preventDefault();
+  document.querySelectorAll("#panel-general,#panel-backlinks").forEach((p) => {
+    p.hidden = p.id !== "panel-" + which;
+  });
+  document.querySelectorAll(".tabs .tab").forEach((t) => t.classList.remove("active"));
+  ev.currentTarget.classList.add("active");
+}
+window.gfTab = gfTab;
+
+async function gfFlag(id, value) {
+  await fetch(`/general-facts/${id}/update`, { method: "POST", body: new URLSearchParams({ needs_change: value }) });
+  const sel = document.querySelector(`#gf-${id} .gf-flag`);
+  if (sel) sel.className = "gf-flag flag-" + value;
+}
+window.gfFlag = gfFlag;
+
+async function gfNote(id, note) {
+  await fetch(`/general-facts/${id}/update`, { method: "POST", body: new URLSearchParams({ note }) });
+}
+window.gfNote = gfNote;
+
+async function gfDismiss(id) {
+  if (!confirm("Dismiss this item? It won't show in the review list.")) return;
+  await fetch(`/general-facts/${id}/dismiss`, { method: "POST" });
+  const row = document.getElementById("gf-" + id);
+  if (row) row.remove();
+}
+window.gfDismiss = gfDismiss;
+
+async function gfCreateIssue(id) {
+  if (!confirm("This statement is wrong → create an external issue from it?")) return;
+  const j = await (await fetch(`/general-facts/${id}/create-issue`, { method: "POST" })).json();
+  if (j.ok) { alertBanner("Issue created — see Results & Issues (External)."); const r = document.getElementById("gf-" + id); if (r) r.style.opacity = ".5"; }
+}
+window.gfCreateIssue = gfCreateIssue;
+
+async function gfPromote(id) {
+  const val = prompt("Promote to a tracked fact rule.\nEnter the CORRECT value for this fact (optional):", "");
+  if (val === null) return;
+  const j = await (await fetch(`/general-facts/${id}/promote-fact`, { method: "POST", body: new URLSearchParams({ current_value: val }) })).json();
+  if (j.ok) { alertBanner("Promoted to a fact rule (" + j.fact_id + ") — see Facts Library."); const r = document.getElementById("gf-" + id); if (r) r.style.opacity = ".5"; }
+}
+window.gfPromote = gfPromote;
 
 async function cancelSync(jobId, sourceId) {
   if (!jobId) return;

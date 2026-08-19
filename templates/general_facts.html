@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}General Facts — ExactFact Checker{% endblock %}
+{% block content %}
+<div class="page-head"><h1>General Facts{% if brand %} · {{ brand }}{% endif %}</h1>
+  <p class="muted">Brand-relevant things other sites say that don't map to a defined fact — reviews,
+    descriptions, opinions. Nothing here is auto-flagged; you decide what needs a change.</p></div>
+
+<div class="tabs">
+  <a class="tab active" href="#general" onclick="gfTab(event,'general')">General Facts
+    {% if rows %}<span class="pill">{{ rows|length }}</span>{% endif %}</a>
+  <a class="tab" href="#backlinks" onclick="gfTab(event,'backlinks')">Backlinks &amp; Mentions
+    {% if external_items %}<span class="pill">{{ external_items|length }}</span>{% endif %}</a>
+</div>
+
+<section id="panel-general">
+  {# ---- filters ---- #}
+  <form class="filters" method="get">
+    <select name="needs_change" onchange="this.form.submit()">
+      <option value="">Needs change: all</option>
+      {% for v in ['undecided','yes','no'] %}
+      <option value="{{ v }}" {{ 'selected' if request.query_params.get('needs_change')==v }}>{{ v }}{% if counts.get(v) %} ({{ counts[v] }}){% endif %}</option>{% endfor %}
+    </select>
+    <select name="kind" onchange="this.form.submit()">
+      <option value="">All sources</option>
+      {% for k in kinds %}<option value="{{ k }}" {{ 'selected' if request.query_params.get('kind')==k }}>{{ k }}</option>{% endfor %}
+    </select>
+    <select name="domain" onchange="this.form.submit()">
+      <option value="">All domains</option>
+      {% for d in domains %}<option value="{{ d }}" {{ 'selected' if request.query_params.get('domain')==d }}>{{ d }}</option>{% endfor %}
+    </select>
+    <span class="muted small" style="margin-left:auto">Export:</span>
+    <a class="btn btn-sm" href="/general-facts/export.csv">CSV</a>
+    <a class="btn btn-sm" href="/general-facts/export.xlsx">Excel</a>
+  </form>
+
+  {% if rows %}
+  <div class="gf-list">
+    {% for g in rows %}
+    <div class="gf-card" id="gf-{{ g.id }}">
+      <div class="evidence gf-quote">{{ g.quote|highlight_external(none, aliases, none) }}</div>
+      <div class="gf-meta">
+        <a class="url gf-src" href="{{ g.source_url }}" target="_blank" title="{{ g.source_url }}">{{ g.domain }}</a>
+        <span class="pill pill-{{ g.source_kind }}">{{ g.source_kind }}</span>
+        <label class="gf-flaglabel">Needs change?
+          <select class="gf-flag flag-{{ g.needs_change }}" onchange="gfFlag({{ g.id }}, this.value)">
+            {% for v in ['undecided','yes','no'] %}
+            <option value="{{ v }}" {{ 'selected' if g.needs_change==v }}>{{ v }}</option>{% endfor %}
+          </select>
+        </label>
+        <span class="gf-actions">
+          <button class="btn btn-sm" onclick="gfPromote({{ g.id }})">Promote to fact</button>
+          <button class="btn btn-sm" onclick="gfCreateIssue({{ g.id }})">Create issue</button>
+          <button class="btn btn-sm btn-cancel" onclick="gfDismiss({{ g.id }})">Dismiss</button>
+        </span>
+      </div>
+      <input class="gf-note" type="text" placeholder="Add a note…" value="{{ g.note or '' }}"
+             onchange="gfNote({{ g.id }}, this.value)" />
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card empty"><p class="muted">No general facts yet. Run an external check from the Dashboard
+    (External flow) — brand mentions that don't match a defined fact land here.</p></div>
+  {% endif %}
+</section>
+
+<section id="panel-backlinks" hidden>
+  <form class="filters" method="get">
+    <input type="hidden" name="_" value="1">
+    <a class="tab-hidden"></a>
+    <select name="mention_type" onchange="this.form.submit()">
+      <option value="">Linked + Unlinked</option>
+      <option value="linked" {{ 'selected' if request.query_params.get('mention_type')=='linked' }}>🔗 Linked (backlinks)</option>
+      <option value="unlinked" {{ 'selected' if request.query_params.get('mention_type')=='unlinked' }}>💬 Unlinked (mentions)</option>
+    </select>
+    <select name="verdict" onchange="this.form.submit()">
+      <option value="">All verdicts</option>
+      <option value="mismatch" {{ 'selected' if request.query_params.get('verdict')=='mismatch' }}>✗ mismatch</option>
+      <option value="general" {{ 'selected' if request.query_params.get('verdict')=='general' }}>📋 general fact</option>
+      <option value="discarded" {{ 'selected' if request.query_params.get('verdict')=='discarded' }}>— discarded/other</option>
+    </select>
+    <span class="muted small">Anchor <mark class="hl-anchor">text</mark> · brand <mark class="hl-brand">names</mark> · <mark class="hl-fact">fact</mark> phrases highlighted.</span>
+    <span class="muted small" style="margin-left:auto">Export:</span>
+    <a class="btn btn-sm" href="/external-items/export.csv">CSV</a>
+    <a class="btn btn-sm" href="/external-items/export.xlsx">Excel</a>
+  </form>
+
+  {% if external_items %}
+  <div class="gf-list">
+    {% for e in external_items %}
+    <div class="gf-card">
+      <div class="gf-quote clamp3 ext-para" id="para-{{ loop.index }}">{{ e.context_paragraph|highlight_external(e.anchor_text, aliases, e.fact_value) }}</div>
+      {% if (e.context_paragraph or '')|length > 220 %}
+      <button type="button" class="linklike small" onclick="var p=document.getElementById('para-{{ loop.index }}');p.classList.toggle('clamp3');this.textContent=p.classList.contains('clamp3')?'show full paragraph ▾':'show less ▴'">show full paragraph ▾</button>
+      {% endif %}
+      <div class="gf-meta">
+        {% if e.mention_type=='linked' %}<span class="pill pill-backlink">🔗 linked</span>
+        {% else %}<span class="pill pill-mention">💬 unlinked</span>{% endif %}
+        <a class="url gf-src" href="{{ e.source_url }}" target="_blank" title="{{ e.source_url }}">{{ e.domain }}</a>
+        {% if e.anchor_text %}<span class="muted small">anchor: <b>{{ e.anchor_text }}</b></span>{% endif %}
+        {% if e.verdict=='mismatch' %}<span class="pill" style="background:#fdecee;color:#b42318">✗ mismatch</span>
+        {% elif e.verdict=='general' %}<span class="pill">📋 general fact</span>
+        {% elif e.verdict=='discarded' %}<span class="pill muted">— not about brand</span>
+        {% else %}<span class="pill muted">pending</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card empty"><p class="muted">No backlinks or mentions discovered yet. Run an external check
+    from the Dashboard (needs DataForSEO connected).</p></div>
+  {% endif %}
+</section>
+{% endblock %}

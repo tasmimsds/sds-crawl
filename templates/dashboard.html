@@ -11,11 +11,15 @@
 
 <div class="cards-grid">
   {% for c in cards %}
-  <div class="card sync-card" data-source="{{ c.row.id }}">
-    <div class="sync-top">
-      <div>
+  {% set pp = c.pipe %}
+  {% set ep = c.ext_pipe %}
+
+  {# ============ SYSTEM 1 — INTERNAL FACT CHECK ============ #}
+  <div class="card sync-card system-card" data-source="{{ c.row.id }}">
+    <div class="head-row">
+      <div class="titles">
+        <div class="sys-label">⌂ Internal Fact Check</div>
         <div class="site-name">{{ c.row.name or c.row.location }}</div>
-        <div class="muted small">{{ c.row.kind|capitalize }} · {{ c.row.location }}</div>
       </div>
       <span class="status status-{{ c.state }}" id="state-{{ c.row.id }}">
         {% if c.state=='synced' %}Synced ✓{% elif c.state=='syncing' %}Syncing…
@@ -26,16 +30,6 @@
     {% if c.state=='needs' %}<div class="muted small note">{{ c.needs_reason }}</div>{% endif %}
     {% if c.state=='failed' and c.last %}<div class="note err">{{ c.last.message }}</div>{% endif %}
 
-    {% set pp = c.pipe %}
-    {% set ep = c.ext_pipe %}
-    {# ---- flow tabs: Internal | External ---- #}
-    <div class="flow-tabs" data-source="{{ c.row.id }}">
-      <button class="flow-tab active" data-flow="internal" onclick="switchFlow({{ c.row.id }},'internal')">Internal</button>
-      <button class="flow-tab" data-flow="external" onclick="switchFlow({{ c.row.id }},'external')">External
-        {% if ep.s5.issues %}<b class="badge-count">{{ ep.s5.issues }}</b>{% endif %}</button>
-    </div>
-
-    <div class="flow-panel" data-flow="internal" data-source="{{ c.row.id }}">
     <div class="pipeline" id="pipe-{{ c.row.id }}" data-source="{{ c.row.id }}"
          data-jobid="{{ pp.job_id or '' }}">
       {# ---- Stage 1: CRAWL ---- #}
@@ -85,26 +79,67 @@
       <button class="btn btn-sm btn-cancel" id="cancel-{{ c.row.id }}" style="{{ '' if c.state=='syncing' else 'display:none' }}"
               onclick="cancelSync({{ c.running.id if c.running else 0 }}, {{ c.row.id }})">Cancel</button>
     </div>
-    </div>{# /internal flow-panel #}
 
-    {# ---- EXTERNAL flow: DISCOVER → FETCH → SCOPE → READ → FACT MATCH ---- #}
-    <div class="flow-panel" data-flow="external" data-source="{{ c.row.id }}" hidden>
+    <form method="post" action="/sites/{{ c.row.id }}/schedule" class="sched-form">
+      <span class="muted small">Auto-sync</span>
+      <select name="mode">
+        <option value="off" {{ 'selected' if not c.sched or c.sched.mode=='off' }}>Off</option>
+        <option value="daily" {{ 'selected' if c.sched and c.sched.mode=='daily' }}>Daily</option>
+        <option value="weekly" {{ 'selected' if c.sched and c.sched.mode=='weekly' }}>Weekly</option>
+      </select>
+      <select name="day_of_week">
+        {% for d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
+        <option value="{{ loop.index0 }}" {{ 'selected' if c.sched and c.sched.day_of_week==loop.index0 }}>{{ d }}</option>{% endfor %}
+      </select>
+      <input type="number" name="hour" min="0" max="23" value="{{ c.sched.hour if c.sched else 3 }}" />
+      <span>:</span>
+      <input type="number" name="minute" min="0" max="59" value="{{ '%02d'|format(c.sched.minute) if c.sched else '00' }}" />
+      <button class="btn btn-sm" type="submit">Save</button>
+    </form>
+    {% if c.sched and c.sched.mode!='off' and c.sched.next_run %}
+    <div class="muted small next-sync">⏱ Next internal sync: {{ c.sched.next_run[:16].replace('T',' ') }} (local time)</div>
+    {% endif %}
+    <div class="muted small">Scheduled runs use your saved scope: <b>{{ c.saved_scope }}</b>
+      <span class="muted">— change it via Sync Now → options.</span></div>
+  </div>{# /internal system card #}
+
+  {# ============ SYSTEM 2 — EXTERNAL FACT CHECK & AUDITING ============ #}
+  <div class="card sync-card system-card" data-source="{{ c.row.id }}">
+    <div class="head-row">
+      <div class="titles">
+        <div class="sys-label">🌐 External Fact Check &amp; Auditing</div>
+        <div class="site-name">{% if ep.brand %}{{ ep.brand }}{% else %}{{ c.row.name or c.row.location }}{% endif %} · web mentions</div>
+      </div>
+      <span class="status status-{{ c.ext_state }}">
+        {% if c.ext_state=='syncing' %}Auditing…{% elif c.ext_state=='synced' %}Audited ✓{% else %}Not run yet{% endif %}
+      </span>
+    </div>
+
     {% if not ep.has_external and not ep.has_brand %}
       <div class="ext-empty">
-        <p class="muted">No external sources yet. External fact-check looks at what <b>other</b> websites
-          say about {% if ep.brand %}<b>{{ ep.brand }}</b>{% else %}this project's brand{% endif %}.</p>
-        <a class="btn btn-sm btn-primary" href="/fact-check">Set up External Sources ↗</a>
+        <p class="muted">Set up external auditing to check what <b>other</b> websites say about
+          {% if ep.brand %}<b>{{ ep.brand }}</b>{% else %}this project's brand{% endif %} — backlinks,
+          reviews, listings — and sort it into fact mismatches vs general facts.</p>
+        <a class="btn btn-sm btn-primary" href="/fact-check">Set up external auditing ↗</a>
       </div>
     {% else %}
+      {% if not ep.dfs_connected %}
+      <div class="note" style="background:#fff7e8;color:#8a5a09;border:1px solid #f6d99a;border-radius:8px;padding:8px 12px;margin:8px 0">
+        ⚡ <b>Connect DataForSEO</b> to auto-discover backlinks &amp; brand mentions. Add
+        <code>DATAFORSEO_LOGIN</code> / <code>DATAFORSEO_PASSWORD</code> to <code>.env</code>.
+        Manual URL checks still work below.
+      </div>
+      {% endif %}
       <div class="pipeline ext-pipeline" id="extpipe-{{ c.row.id }}" data-source="{{ c.row.id }}"
            data-jobid="{{ ep.job_id or '' }}">
-        {# 1 DISCOVER #}
-        <div class="pstage st-{{ ep.s1.status }}" data-stage="1" onclick="location.href='/fact-check'">
+        {# 1 DISCOVER — DataForSEO backlinks + mentions #}
+        <div class="pstage st-{{ ep.s1.status }}" data-stage="1" onclick="location.href='/general-facts#backlinks'">
           <div class="pstage-head"><span class="pnum">1</span> DISCOVER</div>
-          <div class="pbig" data-k="e1main">{{ ep.s1.ready|comma }} sources</div>
+          <div class="pbig" data-k="e1main">{{ ep.s1.total|comma }} sources</div>
           <div class="pstatus" data-k="e1status"></div>
-          <div class="psmall" data-k="e1cand">{{ ep.s1.candidates }} candidates to approve</div>
-          <div class="psmall" data-k="e1man">{{ ep.s1.manual }} manual</div>
+          <div class="psmall" data-k="e1bl">🔗 {{ ep.s1.true_backlinks|comma }} backlinks · {{ ep.s1.true_domains|comma }} domains</div>
+          <div class="psmall" data-k="e1men">💬 {{ ep.s1.search_mentions|comma }} search mentions · {{ ep.s1.linked|comma }} linked / {{ ep.s1.unlinked|comma }} unlinked</div>
+          {% if ep.s1.deferred %}<div class="psmall muted" data-k="e1def">⏸ {{ ep.s1.deferred|comma }} deferred (over cap)</div>{% endif %}
         </div>
         <div class="parrow st-{{ ep.s1.status }}" data-arrow="1"><span>&#9654;</span></div>
         {# 2 FETCH #}
@@ -132,14 +167,14 @@
           <div class="psmall">about {{ ep.brand or 'the brand' }}</div>
         </div>
         <div class="parrow st-{{ ep.s4.status }}" data-arrow="4"><span>&#9654;</span></div>
-        {# 5 FACT MATCH #}
+        {# 5 MATCH & SORT — 3-way: mismatch → Issues · correct → positive · other → General Facts #}
         <div class="pstage st-{{ ep.s5.status }}" data-stage="5" onclick="location.href='/results?scope=external'">
-          <div class="pstage-head"><span class="pnum">5</span> FACT MATCH</div>
-          <div class="pbig" data-k="e5main">{{ (ep.s5.positive + ep.s5.issues + ep.s5.unclear)|comma }} checked</div>
+          <div class="pstage-head"><span class="pnum">5</span> MATCH &amp; SORT</div>
+          <div class="pbig" data-k="e5main">{{ (ep.s5.positive + ep.s5.issues + ep.s5.unclear + ep.s5.general)|comma }} sorted</div>
           <div class="pstatus" data-k="e5status"></div>
-          <div class="psmall pos" data-k="e5pos">✓ {{ ep.s5.positive|comma }} positive</div>
-          <div class="psmall danger" data-k="e5iss">✗ {{ ep.s5.issues|comma }} issues</div>
-          <div class="psmall warn" data-k="e5unc">? {{ ep.s5.unclear|comma }} unclear</div>
+          <div class="psmall danger" data-k="e5iss">✗ {{ ep.s5.issues|comma }} mismatch → Issues</div>
+          <div class="psmall pos" data-k="e5pos">✓ {{ ep.s5.positive|comma }} correct</div>
+          <div class="psmall" data-k="e5gen">📋 {{ ep.s5.general|comma }} general facts</div>
         </div>
       </div>
 
@@ -147,46 +182,39 @@
         {% if ep.last_finished %}Last external check {{ reltime(ep.last_finished) }} —
           {{ ep.s2.ok|comma }} pages across {{ ep.domains }} domains —
           <b class="danger">{{ ep.s5.issues|comma }}</b> mention {{ ep.brand or 'the brand' }} with wrong info,
-          <b class="pos">{{ ep.s5.positive|comma }}</b> correct.
+          <b class="pos">{{ ep.s5.positive|comma }}</b> correct,
+          <b>{{ ep.s5.general|comma }}</b> general facts to review.
         {% else %}Not checked yet — click <b>Run external check</b>.{% endif %}
       </div>
 
       <div class="sync-actions">
-        <button class="btn btn-primary btn-sm" id="extrun-{{ c.row.id }}" onclick="runExternal({{ c.row.id }})">Run external check</button>
-        <a class="btn btn-sm" href="/results?scope=external">View external findings ↗</a>
+        <button class="btn btn-primary btn-sm" id="extrun-{{ c.row.id }}" onclick="runExternal({{ c.row.id }})">Run External Check</button>
+        <a class="btn btn-sm" href="/results?scope=external">Fact mismatches ↗</a>
+        <a class="btn btn-sm" href="/general-facts">📋 General Facts</a>
         <a class="btn btn-sm" href="/fact-check">External sources</a>
       </div>
-    {% endif %}
-    </div>{# /external flow-panel #}
 
-    <form method="post" action="/sites/{{ c.row.id }}/schedule" class="sched-form">
-      <span class="muted small">Auto-sync</span>
-      <select name="mode">
-        <option value="off" {{ 'selected' if not c.sched or c.sched.mode=='off' }}>Off</option>
-        <option value="daily" {{ 'selected' if c.sched and c.sched.mode=='daily' }}>Daily</option>
-        <option value="weekly" {{ 'selected' if c.sched and c.sched.mode=='weekly' }}>Weekly</option>
-      </select>
-      <select name="day_of_week">
-        {% for d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
-        <option value="{{ loop.index0 }}" {{ 'selected' if c.sched and c.sched.day_of_week==loop.index0 }}>{{ d }}</option>{% endfor %}
-      </select>
-      <input type="number" name="hour" min="0" max="23" value="{{ c.sched.hour if c.sched else 3 }}" />
-      <span>:</span>
-      <input type="number" name="minute" min="0" max="59" value="{{ '%02d'|format(c.sched.minute) if c.sched else '00' }}" />
-      <button class="btn btn-sm" type="submit">Save</button>
-    </form>
-    {% if c.sched and c.sched.mode!='off' and c.sched.next_run %}
-    <div class="muted small next-sync">⏱ Next sync: {{ c.sched.next_run[:16].replace('T',' ') }} (local time)</div>
+      <form method="post" action="/sites/{{ c.row.id }}/external-schedule" class="sched-form">
+        <span class="muted small">Auto-audit</span>
+        <select name="mode">
+          <option value="off" {{ 'selected' if not c.ext_sched or c.ext_sched.mode=='off' }}>Off</option>
+          <option value="daily" {{ 'selected' if c.ext_sched and c.ext_sched.mode=='daily' }}>Daily</option>
+          <option value="weekly" {{ 'selected' if c.ext_sched and c.ext_sched.mode=='weekly' }}>Weekly</option>
+        </select>
+        <select name="day_of_week">
+          {% for d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
+          <option value="{{ loop.index0 }}" {{ 'selected' if c.ext_sched and c.ext_sched.day_of_week==loop.index0 }}>{{ d }}</option>{% endfor %}
+        </select>
+        <input type="number" name="hour" min="0" max="23" value="{{ c.ext_sched.hour if c.ext_sched else 4 }}" />
+        <span>:</span>
+        <input type="number" name="minute" min="0" max="59" value="{{ '%02d'|format(c.ext_sched.minute) if c.ext_sched else '00' }}" />
+        <button class="btn btn-sm" type="submit">Save</button>
+      </form>
+      {% if c.ext_sched and c.ext_sched.mode!='off' and c.ext_sched.next_run %}
+      <div class="muted small next-sync">⏱ Next external audit: {{ c.ext_sched.next_run[:16].replace('T',' ') }} (local time)</div>
+      {% endif %}
     {% endif %}
-    <div class="muted small">Scheduled runs use your saved scope: <b>{{ c.saved_scope }}</b>
-      <span class="muted">— change it via Sync Now → options.</span></div>
-
-    <div class="ext-summary">
-      🌐 External: <b>{{ c.ext_sources }}</b> sources · <b>{{ c.ext_fetched }}</b> fetched ·
-      <b class="{{ 'danger' if c.ext_findings }}">{{ c.ext_findings }}</b> open findings ·
-      <a href="/fact-check">check ↗</a>
-    </div>
-  </div>
+  </div>{# /external system card #}
   {% endfor %}
 </div>
 

@@ -1,68 +1,120 @@
 {% extends "base.html" %}
 {% block title %}Reports & Exports — ExactFact Checker{% endblock %}
 {% block content %}
-<div class="page-head"><h1>Reports &amp; Exports</h1>
-  <p class="muted">Findings for the active website. CSVs are generated live from the database on
-    each download (UTF-8, Excel-safe) — never stale.</p></div>
 
-<h2 class="section-h">Findings by category</h2>
-<div class="card table-card">
-  <table class="tbl">
-    <thead><tr><th>Category</th><th class="num">Open</th><th class="num">All</th>
-      <th>Open (CSV · Excel)</th><th>All statuses (CSV · Excel)</th></tr></thead>
-    <tbody>
+{# ---- aligned page header: titles left, primary action right ---- #}
+<div class="head-row">
+  <div class="titles">
+    <h1>Reports &amp; Exports</h1>
+    <p class="muted">Findings for the active website. Files are generated live from the database on each
+      download (UTF-8, Excel-safe) — never stale.</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn btn-primary" href="/reports/full.xlsx?scope=open">⭳ Full report (Excel, all tabs)</a>
+  </div>
+</div>
+
+{# ---- Per-category exports: one card per category, buttons aligned, reflows on mobile ---- #}
+<div class="export-section">
+  <h3>By category</h3>
+  {% if cats %}
+  <div class="export-grid">
     {% for c in cats %}
-      <tr>
-        <td>{{ c.cat|cat_label }}</td>
-        <td class="num">{{ c.open }}</td>
-        <td class="num muted">{{ c.all }}</td>
-        <td>
+    <div class="export-card">
+      <div class="ec-info">
+        <div class="ec-name">{{ c.cat|cat_label }}</div>
+        <div class="ec-meta">{{ c.open }} open · {{ c.all }} all statuses</div>
+      </div>
+      <div class="ec-actions">
+        <span class="btn-group" title="Open findings">
           <a class="btn btn-sm" href="/reports/download.csv?category={{ c.cat }}&scope=open">CSV</a>
           <a class="btn btn-sm" href="/reports/download.xlsx?category={{ c.cat }}&scope=open">Excel</a>
-        </td>
-        <td>
-          <a class="btn btn-sm" href="/reports/download.csv?category={{ c.cat }}&scope=all">CSV</a>
-          <a class="btn btn-sm" href="/reports/download.xlsx?category={{ c.cat }}&scope=all">Excel</a>
-        </td>
-      </tr>
-    {% else %}
-      <tr><td colspan="5" class="muted">No findings yet — run a sync.</td></tr>
+        </span>
+      </div>
+    </div>
     {% endfor %}
-    </tbody>
-  </table>
-  <div class="filters-bar" style="margin-top:14px">
-    <span class="muted small">Export all findings (open):</span>
-    <a class="btn btn-sm" href="/reports/download.csv?scope=open">CSV</a>
-    <a class="btn btn-sm" href="/reports/download.xlsx?scope=open">Excel</a>
-    <span class="muted small" style="margin-left:10px">All matches:</span>
-    <a class="btn btn-sm" href="/reports/download.csv?scope=all">CSV</a>
-    <a class="btn btn-sm" href="/reports/download.xlsx?scope=all">Excel</a>
-    <a class="btn btn-primary" style="margin-left:auto" href="/reports/full.xlsx?scope=open">⭳ Full report (Excel, all tabs)</a>
   </div>
-  <div class="filters-bar" style="margin-top:8px">
-    <span class="muted small">One row per URL (aggregated page fix-list):</span>
-    <a class="btn btn-sm" href="/reports/download.csv?view=by_url&scope=open">CSV</a>
-    <a class="btn btn-sm" href="/reports/download.xlsx?view=by_url&scope=open">Excel</a>
-  </div>
-  {% if ext_open %}
-  <div class="filters-bar" style="margin-top:8px">
-    <span class="muted small">External findings ({{ ext_open }}):</span>
-    <a class="btn btn-sm" href="/reports/download-external.csv?scope=open">CSV</a>
-    <a class="btn btn-sm" href="/reports/download-external.xlsx?scope=open">Excel</a>
-  </div>
+  {% else %}
+  <div class="card empty"><p class="muted">No findings yet — run a sync from the Dashboard.</p></div>
   {% endif %}
 </div>
 
-<h2 class="section-h">HTML report</h2>
-<div class="card">
-  <button class="btn btn-primary" onclick="runExport()">Generate HTML report</button>
-  <a class="btn" href="/reports/full.xlsx?scope=open">Export to Excel (multi-sheet)</a>
-  <span class="muted small" id="export-msg" style="margin-left:10px"></span>
-  {% if html_files %}
-  <ul class="linklist" style="margin-top:12px">
-    {% for f in html_files %}<li><a href="/output/{{ f }}" target="_blank">{{ f }}</a></li>{% endfor %}
-  </ul>
-  {% endif %}
+{# ---- Whole-project exports ---- #}
+<div class="export-section">
+  <h3>Whole project</h3>
+  <div class="export-grid">
+    <div class="export-card feature">
+      <div class="ec-info"><div class="ec-name">Full report</div>
+        <div class="ec-meta">Excel · Summary + one tab per category</div></div>
+      <div class="ec-actions"><a class="btn btn-sm btn-primary" href="/reports/full.xlsx?scope=open">Excel</a></div>
+    </div>
+    <div class="export-card">
+      <div class="ec-info"><div class="ec-name">All open findings</div>
+        <div class="ec-meta">Every open finding, all categories</div></div>
+      <div class="ec-actions"><span class="btn-group">
+        <a class="btn btn-sm" href="/reports/download.csv?scope=open">CSV</a>
+        <a class="btn btn-sm" href="/reports/download.xlsx?scope=open">Excel</a></span></div>
+    </div>
+    <div class="export-card">
+      <div class="ec-info"><div class="ec-name">All matches (any status)</div>
+        <div class="ec-meta">Includes fixed / ignored / false-positive</div></div>
+      <div class="ec-actions"><span class="btn-group">
+        <a class="btn btn-sm" href="/reports/download.csv?scope=all">CSV</a>
+        <a class="btn btn-sm" href="/reports/download.xlsx?scope=all">Excel</a></span></div>
+    </div>
+    <div class="export-card">
+      <div class="ec-info"><div class="ec-name">One row per URL</div>
+        <div class="ec-meta">Aggregated page fix-list</div></div>
+      <div class="ec-actions"><span class="btn-group">
+        <a class="btn btn-sm" href="/reports/download.csv?view=by_url&scope=open">CSV</a>
+        <a class="btn btn-sm" href="/reports/download.xlsx?view=by_url&scope=open">Excel</a></span></div>
+    </div>
+  </div>
+</div>
+
+{# ---- External + General Facts ---- #}
+<div class="export-section">
+  <h3>External</h3>
+  <div class="export-grid">
+    <div class="export-card">
+      <div class="ec-info"><div class="ec-name">External fact mismatches</div>
+        <div class="ec-meta">{{ ext_open }} open · other sites stating our facts wrongly</div></div>
+      <div class="ec-actions"><span class="btn-group">
+        <a class="btn btn-sm" href="/reports/download-external.csv?scope=open">CSV</a>
+        <a class="btn btn-sm" href="/reports/download-external.xlsx?scope=open">Excel</a></span></div>
+    </div>
+    <div class="export-card">
+      <div class="ec-info"><div class="ec-name">General Facts</div>
+        <div class="ec-meta">{{ gen_open }} open · brand info to review</div></div>
+      <div class="ec-actions"><span class="btn-group">
+        <a class="btn btn-sm" href="/general-facts/export.csv">CSV</a>
+        <a class="btn btn-sm" href="/general-facts/export.xlsx">Excel</a></span></div>
+    </div>
+    <div class="export-card">
+      <div class="ec-info"><div class="ec-name">Backlinks &amp; Mentions</div>
+        <div class="ec-meta">link/mention context — anchor, paragraph, verdict</div></div>
+      <div class="ec-actions"><span class="btn-group">
+        <a class="btn btn-sm" href="/external-items/export.csv">CSV</a>
+        <a class="btn btn-sm" href="/external-items/export.xlsx">Excel</a></span></div>
+    </div>
+  </div>
+</div>
+
+{# ---- HTML report ---- #}
+<div class="export-section">
+  <h3>HTML report</h3>
+  <div class="card">
+    <div class="head-actions" style="margin-bottom:6px">
+      <button class="btn btn-primary" onclick="runExport()">Generate HTML report</button>
+      <a class="btn" href="/reports/full.xlsx?scope=open">Export to Excel (multi-sheet)</a>
+      <span class="muted small" id="export-msg"></span>
+    </div>
+    {% if html_files %}
+    <ul class="linklist" style="margin-top:6px">
+      {% for f in html_files %}<li><a href="/output/{{ f }}" target="_blank">{{ f }}</a></li>{% endfor %}
+    </ul>
+    {% endif %}
+  </div>
 </div>
 
 <script>

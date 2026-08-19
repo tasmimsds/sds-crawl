@@ -105,13 +105,33 @@ def brightdata() -> dict:
 
 
 def dataforseo() -> dict:
-    """DataForSEO SERP API config from the environment (HTTP Basic: login:password)."""
+    """DataForSEO API config from the environment (HTTP Basic: login:password).
+    Caps + cache window bound API spend for backlinks/mention discovery."""
     return {
         "login": (os.getenv("DATAFORSEO_LOGIN") or "").strip(),
         "password": (os.getenv("DATAFORSEO_PASSWORD") or "").strip(),
         "location": (os.getenv("SERP_LOCATION") or "us").strip(),
         "language": (os.getenv("SERP_LANGUAGE") or "en").strip(),
         "results": int(os.getenv("SERP_RESULTS_PER_QUERY") or 20),
+        # discovery cost controls. The LIST pull is cheap and always FULL; the cap only
+        # throttles the expensive DOWNSTREAM fetch/scope/match per run.
+        "backlinks_cap": int(os.getenv("DATAFORSEO_BACKLINKS_CAP") or 100),
+        "process_cap": int(os.getenv("EXTERNAL_PROCESS_CAP") or 200),
+        "mention_cap": int(os.getenv("DATAFORSEO_MENTION_CAP") or 30),
+        "cache_hours": int(os.getenv("DATAFORSEO_DISCOVERY_CACHE_HOURS") or 24),
+    }
+
+
+def brightdata_serp() -> dict:
+    """Bright Data SERP config for search-engine mention discovery (Google + Bing).
+    Reuses the SERP proxy creds; pages/engines are tunable per run."""
+    bd = brightdata()
+    return {
+        "username": bd["username"], "password": bd["password"], "host": bd["host"],
+        "port": bd["port"], "verify_ssl": bd["verify_ssl"],
+        "engines": [e.strip() for e in (os.getenv("SERP_ENGINES") or "google,bing").split(",") if e.strip()],
+        "pages": int(os.getenv("SERP_PAGES") or 5),          # pages per query per engine
+        "per_page": int(os.getenv("SERP_PER_PAGE") or 20),
     }
 
 

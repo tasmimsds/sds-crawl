@@ -82,6 +82,29 @@ h1{font-size:24px;margin:0 0 8px} h2{font-size:18px;margin:0 0 12px}
 .pill-blog{background:#eef2ff;color:#3a49b8;border-color:#c9d2f5}
 .pill-news{background:#fef2f8;color:#b03b7a;border-color:#f3c9de}
 .pill-author{background:#f4f0fb;color:#6b45b8;border-color:#ddd0f2}
+.pill-review{background:#fef2f8;color:#b03b7a;border-color:#f3c9de}
+.pill-listing{background:#eef6ff;color:#1f6fb2;border-color:#c9e0f5}
+.pill-backlink{background:#eefaf0;color:#0a7d3f;border-color:#bce7ca}
+.pill-mention{background:#f4f0fb;color:#6b45b8;border-color:#ddd0f2}
+/* General Facts as cards: quote wraps full-width, meta+actions in a footer row */
+.gf-list{display:flex;flex-direction:column;gap:12px}
+.gf-card{border:1px solid var(--border);border-radius:12px;background:var(--surface);
+  box-shadow:var(--shadow);padding:14px 16px;min-width:0}
+.gf-quote{margin:0 0 10px;word-break:break-word;overflow-wrap:anywhere}
+.gf-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.gf-src{max-width:220px}
+.gf-flaglabel{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.gf-actions{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+.gf-note{width:100%;margin-top:10px;border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;background:var(--bg)}
+.gf-flag{border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px;background:var(--bg)}
+.gf-flag.flag-yes{background:#fdecee;color:#b42318;border-color:#f7c8cc;font-weight:700}
+.gf-flag.flag-no{background:#e7f7ee;color:#0a7d3f;border-color:#b7e6ca}
+@media (max-width:640px){ .gf-actions{margin-left:0;width:100%} }
+/* external context paragraph highlights — three distinct styles */
+.ext-para{line-height:1.6}
+mark.hl-anchor{background:#e5e9ff;color:#3a49b8;border-radius:3px;padding:0 2px;font-weight:600}
+mark.hl-brand{background:#e7f7ee;color:#0a7d3f;border-radius:3px;padding:0 2px;font-weight:600}
+mark.hl-fact{background:#fff2b0;color:#7a5b00;border-radius:3px;padding:0 2px;font-weight:700}
 
 .progress{margin-top:14px}
 .bar{height:9px;background:var(--bg);border:1px solid var(--border);border-radius:999px;overflow:hidden}
@@ -131,6 +154,13 @@ h1{font-size:24px;margin:0 0 8px} h2{font-size:18px;margin:0 0 12px}
 /* ---- dashboard sync cards ---- */
 .cards-grid{display:grid;grid-template-columns:1fr;gap:16px}
 .sync-card{margin-bottom:0}
+/* two distinct engines on the dashboard, each its own bordered card.
+   min-width:0 lets the grid item respect the track width so its wide pipeline
+   scrolls inside the card instead of stretching the card past the viewport. */
+.cards-grid > *{min-width:0}
+.system-card{border:1px solid var(--border);min-width:0;overflow:hidden}
+.sys-label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--primary);
+  font-weight:800;margin-bottom:2px}
 .sync-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .status{font-size:13px;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap}
 .status-synced{background:#e7f7ee;color:#0a7d3f}
@@ -153,7 +183,8 @@ h1{font-size:24px;margin:0 0 8px} h2{font-size:18px;margin:0 0 12px}
 
 /* facts library CRUD */
 .lib-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
-.import-form{display:flex;gap:6px;align-items:center;margin-left:auto}
+.import-form{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;min-width:0}
+.import-form input[type=file]{min-width:0;max-width:100%}
 .row-actions{white-space:nowrap;display:flex;gap:10px;align-items:center}
 .inline{display:inline}
 .linkbtn{background:none;border:none;color:var(--primary);cursor:pointer;font-size:14px;padding:0;font-weight:600}
@@ -291,6 +322,7 @@ a.url,.url{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidde
   .results-toolbar{flex-direction:column;align-items:stretch}
   .cf-head{flex-direction:column}
   .tbl .url,.tbl .url a{max-width:180px}
+  .import-form{margin-left:0;width:100%}
 }
 
 /* badges never wrap; keep the severity column from collapsing */
@@ -321,7 +353,8 @@ a.url,.url{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidde
 .modal .chk{display:flex;gap:6px;align-items:center;margin:10px 0;font-weight:600}
 
 /* ---- Dashboard pipeline flow (CRAWL -> READ -> MATCH) ---- */
-.pipeline{display:flex;align-items:stretch;gap:0;margin:14px 0 6px;flex-wrap:nowrap}
+.pipeline{display:flex;align-items:stretch;gap:0;margin:14px 0 6px;flex-wrap:nowrap;overflow-x:auto}
+.pipeline .pstage{min-width:150px}
 /* the 5-stage external flow needs to scroll on narrow cards rather than squash */
 .ext-pipeline{overflow-x:auto}
 .ext-pipeline .pstage{min-width:150px}
@@ -440,3 +473,42 @@ td.num a{font-weight:700}
 .fb-preview{background:var(--primary-soft);border-radius:9px;padding:10px 12px;font-size:13px;
   color:var(--fg);font-family:ui-monospace,monospace;word-break:break-word}
 .fb-save-name{border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:13px}
+
+/* ============================================================
+   SHARED FOUNDATION COMPONENTS (systemic UI pass)
+   Aligned page header, export-card grid, button groups.
+   Used app-wide so no page styles its own layout.
+   ============================================================ */
+
+/* consistent button height everywhere (prevents ragged action rows) */
+.btn{min-height:38px}
+.btn-sm{min-height:32px}
+.btn-group{display:inline-flex;gap:6px;flex-wrap:wrap}
+
+/* page header: title-block left, actions right, aligned on one baseline,
+   wraps cleanly on narrow widths (no collision with content below) */
+.head-row{display:flex;align-items:flex-start;justify-content:space-between;
+  gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.head-row .titles{min-width:0;flex:1 1 320px}
+.head-row .titles h1{margin-bottom:2px}
+.head-row .titles p{margin:0}
+.head-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+/* export cards: one item = one card with name + optional meta + format buttons.
+   Reflows from multi-column grid to a single column on mobile; never overlaps. */
+.export-section{margin:20px 0}
+.export-section > h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);margin:0 0 10px}
+.export-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.export-card{border:1px solid var(--border);border-radius:12px;padding:14px 16px;
+  background:var(--surface);box-shadow:var(--shadow);display:flex;align-items:center;
+  justify-content:space-between;gap:14px;min-width:0}
+.export-card .ec-info{min-width:0}
+.export-card .ec-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.export-card .ec-meta{color:var(--muted);font-size:12px;margin-top:2px}
+.export-card .ec-actions{display:flex;gap:6px;flex-shrink:0}
+.export-card.feature{background:var(--primary-soft);border-color:#c9d0fb}
+@media (max-width:640px){
+  .export-grid{grid-template-columns:1fr}
+  .head-actions{width:100%}
+}

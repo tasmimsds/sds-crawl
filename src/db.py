@@ -275,6 +275,54 @@ CREATE TABLE IF NOT EXISTS external_findings (
 );
 CREATE INDEX IF NOT EXISTS idx_ext_source ON external_findings(source_id);
 
+-- External auditing runs on its OWN schedule, independent of the internal sync schedule.
+CREATE TABLE IF NOT EXISTS external_schedules (
+    source_id INTEGER PRIMARY KEY REFERENCES sources(id),
+    mode TEXT DEFAULT 'off',          -- 'off' | 'daily' | 'weekly'
+    day_of_week INTEGER DEFAULT 0,
+    hour INTEGER DEFAULT 4,
+    minute INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    next_run TEXT,
+    updated_at TEXT
+);
+
+-- Backlinks / referring pages discovered via DataForSEO (marketing view + fetch source).
+CREATE TABLE IF NOT EXISTS external_backlinks (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER REFERENCES sources(id),
+    referring_url TEXT,
+    referring_domain TEXT,
+    anchor TEXT,
+    dofollow INTEGER DEFAULT 1,
+    first_seen TEXT,
+    page_title TEXT,
+    discovered_at TEXT,
+    UNIQUE(source_id, referring_url)
+);
+CREATE INDEX IF NOT EXISTS idx_backlink_source ON external_backlinks(source_id);
+
+-- "General Facts": brand-relevant passages that don't map to a defined fact — a
+-- review bucket the user triages (needs-change flag), can promote to a fact rule,
+-- or convert to an issue. Never auto-flagged.
+CREATE TABLE IF NOT EXISTS general_facts (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER REFERENCES sources(id),
+    page_id INTEGER REFERENCES external_pages(id),
+    quote TEXT,
+    source_url TEXT,
+    domain TEXT,
+    source_kind TEXT,                 -- backlink | mention | review | listing
+    needs_change TEXT DEFAULT 'undecided',  -- yes | no | undecided
+    note TEXT,
+    status TEXT DEFAULT 'open',       -- open | promoted | dismissed
+    promoted_fact_id INTEGER,
+    issue_id INTEGER,
+    created_at TEXT,
+    UNIQUE(source_id, source_url, quote)
+);
+CREATE INDEX IF NOT EXISTS idx_genfact_source ON general_facts(source_id);
+
 -- Per-website auto-sync schedule.
 CREATE TABLE IF NOT EXISTS schedules (
     id INTEGER PRIMARY KEY,
@@ -353,7 +401,7 @@ def connect() -> sqlite3.Connection:
         "matches_issue": "INTEGER DEFAULT 0", "matches_unclear": "INTEGER DEFAULT 0",
         # external pipeline FACT MATCH counts (positive/issue/unclear about the brand)
         "ext_positive": "INTEGER DEFAULT 0", "ext_issue": "INTEGER DEFAULT 0",
-        "ext_unclear": "INTEGER DEFAULT 0",
+        "ext_unclear": "INTEGER DEFAULT 0", "ext_general": "INTEGER DEFAULT 0",
     })
     _ensure_columns(conn, "fact_rules", {"scope": "TEXT DEFAULT 'both'", "product_id": "INTEGER"})
     _ensure_columns(conn, "issues", {"product_id": "INTEGER"})
@@ -367,6 +415,11 @@ def connect() -> sqlite3.Connection:
         "last_checked_at": "TEXT", "severity": "TEXT DEFAULT 'high'",
         "deleted_at": "TEXT", "note": "TEXT",
     })
+    # external item context: linked backlink vs unlinked mention, anchor, full paragraph
+    _ensure_columns(conn, "external_pages", {
+        "mention_type": "TEXT", "anchor_text": "TEXT", "context_paragraph": "TEXT",
+    })
+    _ensure_columns(conn, "external_backlinks", {"context_paragraph": "TEXT"})
     _ensure_columns(conn, "issues", {
         "deleted_at": "TEXT", "note": "TEXT", "edited": "INTEGER DEFAULT 0",
         "original_snapshot": "TEXT", "last_checked_at": "TEXT",

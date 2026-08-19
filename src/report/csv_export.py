@@ -122,6 +122,74 @@ def build_url_summary_csv(conn, source_id: int, scope: str = "open") -> str:
     return _BOM + buf.getvalue()
 
 
+EXTITEM_COLS = ["source_url", "domain", "mention_type", "anchor_text", "context_paragraph",
+                "brand_mentions_found", "matched_fact", "verdict", "needs_change"]
+
+
+def external_item_rows(conn, source_id, aliases=None):
+    """Backlink/mention items with mention_type, anchor, paragraph, verdict — the
+    link+mention context report. Only the requested fields (no backlink-metric dump)."""
+    aliases = [a.lower() for a in (aliases or []) if a]
+    rows = conn.execute(
+        """SELECT p.url AS source_url, p.domain, p.mention_type, p.anchor_text,
+                  p.context_paragraph, p.fetch_status,
+                  (SELECT f.fact_rule FROM external_findings f WHERE f.page_id=p.id
+                     AND f.kind='factcheck' AND f.status='open' AND f.deleted_at IS NULL LIMIT 1) AS matched_fact,
+                  (SELECT 1 FROM external_findings f WHERE f.page_id=p.id AND f.kind='factcheck'
+                     AND f.status='open' AND f.deleted_at IS NULL LIMIT 1) AS is_mismatch,
+                  (SELECT g.needs_change FROM general_facts g WHERE g.page_id=p.id AND g.status='open' LIMIT 1) AS needs_change,
+                  (SELECT 1 FROM general_facts g WHERE g.page_id=p.id AND g.status='open' LIMIT 1) AS is_general
+           FROM external_pages p
+           WHERE p.source_id=? AND p.source_type IN ('backlink','mention')
+           ORDER BY p.mention_type, p.id DESC""", (source_id,)).fetchall()
+    out = []
+    for r in rows:
+        para = (r["context_paragraph"] or "").lower()
+        found = "; ".join(sorted({a for a in aliases if a in para})) if aliases else ""
+        verdict = ("mismatch" if r["is_mismatch"] else "general" if r["is_general"]
+                   else "discarded" if r["fetch_status"] == "ok" else "pending")
+        out.append({"source_url": r["source_url"], "domain": r["domain"],
+                    "mention_type": r["mention_type"] or "", "anchor_text": r["anchor_text"] or "",
+                    "context_paragraph": r["context_paragraph"] or "",
+                    "brand_mentions_found": found, "matched_fact": r["matched_fact"] or "",
+                    "verdict": verdict, "needs_change": r["needs_change"] or ""})
+    return out
+
+
+def build_external_items_csv(conn, source_id: int, aliases=None) -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["# external backlinks & mentions (link/mention context report)"])
+    w.writerow(EXTITEM_COLS)
+    for r in external_item_rows(conn, source_id, aliases):
+        w.writerow([r[c] for c in EXTITEM_COLS])
+    return _BOM + buf.getvalue()
+
+
+GENFACT_COLS = ["quote", "domain", "source_url", "source_kind", "needs_change", "note",
+                "status", "created_at"]
+
+
+def general_fact_rows(conn, source_id, scope="open"):
+    where = ["source_id=?"]
+    params = [source_id]
+    if scope == "open":
+        where.append("status='open'")
+    return conn.execute(
+        f"""SELECT quote, domain, source_url, source_kind, needs_change, note, status, created_at
+            FROM general_facts WHERE {' AND '.join(where)} ORDER BY id DESC""", params).fetchall()
+
+
+def build_general_facts_csv(conn, source_id: int, scope: str = "open") -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([f"# general facts (brand info not mapped to a defined fact)  scope={scope}"])
+    w.writerow(GENFACT_COLS)
+    for r in general_fact_rows(conn, source_id, scope):
+        w.writerow([r[c] or "" for c in GENFACT_COLS])
+    return _BOM + buf.getvalue()
+
+
 def build_rows_csv(rows, ext_rows) -> str:
     """CSV for the Results advanced-filter view (already-fetched row dicts), same columns+BOM."""
     buf = io.StringIO()

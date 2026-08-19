@@ -135,6 +135,37 @@ def _highlight_match(evidence, matched):
     return Markup(text)
 
 
+def _highlight_external(paragraph, anchor=None, aliases=None, fact_value=None):
+    """Highlight an external context paragraph with THREE distinct styles:
+    the anchor text (hl-anchor), brand/alias names (hl-brand), and any matched
+    fact phrase (hl-fact). Escapes first; never nests marks."""
+    import html
+    import re as _re
+    from markupsafe import Markup
+
+    text = html.escape(str(paragraph or ""))
+    spans = []
+    if fact_value:
+        spans.append((str(fact_value), "hl-fact"))
+    for a in (aliases or []):
+        if a:
+            spans.append((str(a), "hl-brand"))
+    if anchor:
+        spans.append((str(anchor), "hl-anchor"))
+    for term, cls in spans:
+        term_e = html.escape(term).strip()
+        if len(term_e) < 2:
+            continue
+        pat = _re.compile(_re.escape(term_e), _re.I)
+        parts = _re.split(r'(<mark class="[^"]*">.*?</mark>)', text)
+        for i, seg in enumerate(parts):
+            if seg.startswith("<mark"):
+                continue
+            parts[i] = pat.sub(lambda m: f'<mark class="{cls}">{m.group(0)}</mark>', seg)
+        text = "".join(parts)
+    return Markup(text)
+
+
 templates.env.globals["reltime"] = _reltime
 templates.env.globals["fmt_dur"] = _fmt_dur
 templates.env.filters["fromjson"] = _fromjson
@@ -143,6 +174,7 @@ templates.env.filters["short_url"] = _short_url
 templates.env.filters["pretty_title"] = _pretty_title
 templates.env.filters["comma"] = _comma
 templates.env.filters["highlight_match"] = _highlight_match
+templates.env.filters["highlight_external"] = _highlight_external
 
 FACT_CATS = ("database_size", "positioning", "free_claim", "language_count",
              "region_count", "regulation_count", "feature_claim", "faq", "other_mismatch")
@@ -246,6 +278,7 @@ def dashboard(request: Request):
         else:
             state = "synced"
         sch = conn.execute("SELECT * FROM schedules WHERE source_id=?", (sid,)).fetchone()
+        ext_sch = conn.execute("SELECT * FROM external_schedules WHERE source_id=?", (sid,)).fetchone()
         ext_src = conn.execute("SELECT COUNT(*) c FROM external_pages WHERE source_id=?", (sid,)).fetchone()["c"]
         ext_ok = conn.execute("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='ok'", (sid,)).fetchone()["c"]
         ext_find = conn.execute(
@@ -256,9 +289,15 @@ def dashboard(request: Request):
         pipe = pipeline_state(conn, sid)
         ext_pipe = external_pipeline_state(conn, sid)
         rc = get_run_config(conn, sid)
+        # external system runs as its own job — surface its live/last state independently
+        ext_running = conn.execute(
+            "SELECT id FROM jobs WHERE source_id=? AND type='external' AND status IN ('running','queued') LIMIT 1",
+            (sid,)).fetchone()
+        ext_state = "syncing" if ext_running else ("synced" if ext_pipe["last_finished"] else "needs")
         cards.append({"row": s, "total": total, "crawled": crawled, "errors": errs,
                       "running": running, "last": last, "needs_reason": reason, "state": state,
-                      "sched": sch, "ext_sources": ext_src, "ext_fetched": ext_ok,
+                      "sched": sch, "ext_sched": ext_sch, "ext_state": ext_state,
+                      "ext_sources": ext_src, "ext_fetched": ext_ok,
                       "ext_findings": ext_find, "pipe": pipe, "ext_pipe": ext_pipe,
                       "saved_scope": scope_label(rc["scope"], rc["locale"])})
     history = conn.execute(
@@ -439,15 +478,18 @@ async def external_run(source_id: int = Form(None), request: Request = None):
 
 
 @app.post("/external/discover")
-async def external_discover(request: Request):
-    from .config import serp_enabled
-    from .external.pages import discover_mentions
+async def external_discover(request: Request, force: str = Form("")):
+    """DataForSEO discovery (backlinks + mentions) for the active project. Returns
+    counts + actual API cost; skips (cached) unless force=1."""
+    from .external.discover import discover_external
 
     conn = _conn()
     active_src, _ = _active_source(request, conn)
-    if active_src and serp_enabled():
-        await run_in_threadpool(discover_mentions, conn, active_src["id"])
-    return RedirectResponse("/fact-check", status_code=303)
+    if not active_src:
+        return JSONResponse({"error": "no site"}, status_code=400)
+    res = await run_in_threadpool(discover_external, conn, active_src["id"],
+                                  force=bool(force))
+    return JSONResponse(res)
 
 
 @app.post("/external/approve")
@@ -473,6 +515,180 @@ async def external_recheck(fid: int):
 
     out = await run_in_threadpool(recheck_external_finding, _conn(), fid)
     return JSONResponse(out)
+
+
+# ---- General Facts (external brand info that doesn't map to a defined fact) ----
+@app.get("/general-facts", response_class=HTMLResponse)
+def general_facts_page(request: Request):
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return render(request, "general_facts.html", "general", {"rows": [], "external_items": [],
+                      "brand": "", "aliases": [], "counts": {}, "kinds": [], "domains": []})
+    sid = active_src["id"]
+    qp = request.query_params
+    where, params = ["source_id=?"], [sid]
+    if qp.get("needs_change") in ("yes", "no", "undecided"):
+        where.append("needs_change=?"); params.append(qp["needs_change"])
+    if qp.get("kind"):
+        where.append("source_kind=?"); params.append(qp["kind"])
+    if qp.get("domain"):
+        where.append("domain=?"); params.append(qp["domain"])
+    if qp.get("status"):
+        where.append("status=?"); params.append(qp["status"])
+    else:
+        where.append("status='open'")
+    rows = [dict(r) for r in conn.execute(
+        f"SELECT * FROM general_facts WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT 500",
+        params)]
+    counts = {r["needs_change"]: r["c"] for r in conn.execute(
+        "SELECT needs_change, COUNT(*) c FROM general_facts WHERE source_id=? AND status='open' GROUP BY needs_change",
+        (sid,))}
+    kinds = [r["source_kind"] for r in conn.execute(
+        "SELECT DISTINCT source_kind FROM general_facts WHERE source_id=? ORDER BY source_kind", (sid,))]
+    domains = [r["domain"] for r in conn.execute(
+        "SELECT domain, COUNT(*) c FROM general_facts WHERE source_id=? AND status='open' GROUP BY domain ORDER BY c DESC LIMIT 40", (sid,))]
+    from .external.brand import get_brand
+    brand = get_brand(conn, sid) or {}
+    aliases = [brand.get("brand_name")] + list(brand.get("aliases", []))
+    aliases = [a for a in aliases if a]
+    # Backlinks & Mentions table: external items with mention_type, anchor, context paragraph
+    # and verdict (mismatch ✗ / general 📋 / correct ✓ / — for discarded/pending).
+    mt = request.query_params.get("mention_type")
+    ew = ["p.source_id=?", "p.source_type IN ('backlink','mention')"]
+    ep = [sid]
+    if mt in ("linked", "unlinked"):
+        ew.append("p.mention_type=?"); ep.append(mt)
+    external_items = [dict(r) for r in conn.execute(
+        f"""SELECT p.url AS source_url, p.domain, p.mention_type, p.anchor_text,
+                   p.context_paragraph, p.fetch_status,
+                   (SELECT f.expected FROM external_findings f WHERE f.page_id=p.id
+                      AND f.kind='factcheck' AND f.status='open' AND f.deleted_at IS NULL LIMIT 1) AS fact_value,
+                   (SELECT 1 FROM external_findings f WHERE f.page_id=p.id AND f.kind='factcheck'
+                      AND f.status='open' AND f.deleted_at IS NULL LIMIT 1) AS is_mismatch,
+                   (SELECT 1 FROM general_facts g WHERE g.page_id=p.id AND g.status='open' LIMIT 1) AS is_general
+            FROM external_pages p
+            WHERE {' AND '.join(ew)} ORDER BY p.mention_type, p.id DESC LIMIT 400""", ep)]
+    vfilter = request.query_params.get("verdict")
+    for it in external_items:
+        it["verdict"] = ("mismatch" if it["is_mismatch"] else
+                         "general" if it["is_general"] else
+                         "discarded" if it["fetch_status"] == "ok" else "pending")
+    if vfilter:
+        external_items = [i for i in external_items if i["verdict"] == vfilter]
+    return render(request, "general_facts.html", "general",
+                  {"rows": rows, "counts": counts, "kinds": kinds, "domains": domains,
+                   "external_items": external_items, "aliases": aliases,
+                   "brand": brand.get("brand_name") or ""})
+
+
+@app.get("/external-items/export.csv")
+def external_items_csv(request: Request):
+    from .external.brand import get_brand
+    from .report.csv_export import build_external_items_csv
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return JSONResponse({"error": "no site"}, status_code=400)
+    b = get_brand(conn, active_src["id"]) or {}
+    aliases = [b.get("brand_name")] + list(b.get("aliases", []))
+    return _csv_response(build_external_items_csv(conn, active_src["id"], aliases), "backlinks_mentions")
+
+
+@app.get("/external-items/export.xlsx")
+def external_items_xlsx(request: Request):
+    from .external.brand import get_brand
+    from .report.xlsx_export import build_external_items_xlsx
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return JSONResponse({"error": "no site"}, status_code=400)
+    b = get_brand(conn, active_src["id"]) or {}
+    aliases = [b.get("brand_name")] + list(b.get("aliases", []))
+    return _xlsx_response(build_external_items_xlsx(conn, active_src["id"], aliases), "backlinks_mentions")
+
+
+@app.get("/general-facts/export.csv")
+def general_facts_csv(request: Request, scope: str = "open"):
+    from .report.csv_export import build_general_facts_csv
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return JSONResponse({"error":"no site"}, status_code=400)
+    return _csv_response(build_general_facts_csv(conn, active_src["id"], scope), "general_facts")
+
+
+@app.get("/general-facts/export.xlsx")
+def general_facts_xlsx(request: Request, scope: str = "open"):
+    from .report.xlsx_export import build_general_facts_xlsx
+    conn = _conn()
+    active_src, _ = _active_source(request, conn)
+    if not active_src:
+        return JSONResponse({"error":"no site"}, status_code=400)
+    return _xlsx_response(build_general_facts_xlsx(conn, active_src["id"], scope), "general_facts")
+
+
+@app.post("/general-facts/{gid}/update")
+def general_fact_update(gid: int, needs_change: str = Form(None), note: str = Form(None)):
+    conn = _conn()
+    if needs_change in ("yes", "no", "undecided"):
+        conn.execute("UPDATE general_facts SET needs_change=? WHERE id=?", (needs_change, gid))
+    if note is not None:
+        conn.execute("UPDATE general_facts SET note=? WHERE id=?", (note, gid))
+    conn.commit()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/general-facts/{gid}/dismiss")
+def general_fact_dismiss(gid: int):
+    conn = _conn()
+    conn.execute("UPDATE general_facts SET status='dismissed' WHERE id=?", (gid,))
+    conn.commit()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/general-facts/{gid}/create-issue")
+def general_fact_create_issue(gid: int):
+    """Promote a general fact the user judged wrong into an external issue."""
+    from .db import now_iso
+    conn = _conn()
+    g = conn.execute("SELECT * FROM general_facts WHERE id=?", (gid,)).fetchone()
+    if not g:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    cur = conn.execute(
+        """INSERT INTO external_findings (source_id, kind, external_url, domain, snippet,
+             verdict, reason, finding_type, severity, status, created_at, last_checked_at)
+           VALUES (?, 'factcheck', ?, ?, ?, 'mismatch', ?, 'other_mismatch', 'high', 'open', ?, ?)""",
+        (g["source_id"], g["source_url"], g["domain"], g["quote"],
+         "Flagged from General Facts review", now_iso(), now_iso()))
+    conn.execute("UPDATE general_facts SET status='promoted', issue_id=? WHERE id=?",
+                 (cur.lastrowid, gid))
+    conn.commit()
+    return JSONResponse({"ok": True, "issue_id": cur.lastrowid})
+
+
+@app.post("/general-facts/{gid}/promote-fact")
+def general_fact_promote(gid: int, current_value: str = Form(""), name: str = Form("")):
+    """Turn a recurring general statement into a tracked fact rule (scope=external)."""
+    from .db import now_iso
+    conn = _conn()
+    g = conn.execute("SELECT * FROM general_facts WHERE id=?", (gid,)).fetchone()
+    if not g:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    slug = f"genfact_{gid}"
+    label = name or (g["quote"] or "")[:80]
+    conn.execute(
+        """INSERT INTO fact_rules (slug, name, description, rule_type, category, correct_value,
+             scope, severity, applies_to, enabled, created_at, updated_at)
+           VALUES (?,?,?, 'query', 'other_mismatch', ?, 'external', 'medium', 'all', 1, ?, ?)
+           ON CONFLICT(slug) DO UPDATE SET name=excluded.name,
+             correct_value=excluded.correct_value, description=excluded.description""",
+        (slug, label, g["quote"], current_value or None, now_iso(), now_iso()))
+    row = conn.execute("SELECT id FROM fact_rules WHERE slug=?", (slug,)).fetchone()
+    conn.execute("UPDATE general_facts SET status='promoted', promoted_fact_id=? WHERE id=?",
+                 (row["id"] if row else None, gid))
+    conn.commit()
+    return JSONResponse({"ok": True, "fact_id": slug})
 
 
 @app.post("/fact-check/interpret", response_class=HTMLResponse)
@@ -992,11 +1208,14 @@ def reports_page(request: Request):
         ext_open = conn.execute("SELECT COUNT(*) c FROM external_findings WHERE source_id=? "
                                 "AND kind='factcheck' AND deleted_at IS NULL AND status='open'",
                                 (active_src["id"],)).fetchone()["c"]
+        gen_open = conn.execute("SELECT COUNT(*) c FROM general_facts WHERE source_id=? "
+                                "AND status='open'", (active_src["id"],)).fetchone()["c"]
     else:
-        ext_open = 0
+        ext_open = gen_open = 0
     html_files = sorted((p.name for p in _out.glob("*.html")), reverse=True)[:5]
     return render(request, "reports.html", "reports",
-                  {"cats": cats, "ext_open": ext_open, "html_files": html_files})
+                  {"cats": cats, "ext_open": ext_open, "gen_open": gen_open,
+                   "html_files": html_files})
 
 
 @app.get("/reports/download.csv")
@@ -1425,17 +1644,29 @@ def external_scope_json(source_id: int):
     ok_pages = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='ok'", source_id)
     candidates = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='candidate'", source_id)
     brand = get_brand(conn, source_id) or {}
+    from .external.discover import discovery_status
+    ds = discovery_status(conn, source_id)
+    deferred = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='deferred'", source_id)
     # SCOPE + MATCH run the LLM over fetched pages (~fast-model calls); rough per-page cost.
     pages_scoped = pending + ok_pages
     per_page = 0.0009  # ~2 fast-model passes (scope + match) per page, haiku pricing
-    est = round(pages_scoped * per_page, 4)
+    est_llm = pages_scoped * per_page
+    # discovery bills only if not cached: DataForSEO backlinks list (~$0.06/1k) + Bright Data SERP
+    est_dfs = 0.0 if ds["cached"] else 0.15
     return JSONResponse({
         "brand": brand.get("brand_name") or "",
         "has_brand": bool(brand.get("brand_name")),
-        "pending_to_fetch": pending, "already_fetched": ok_pages,
+        "pending_to_fetch": pending, "already_fetched": ok_pages, "deferred": deferred,
         "discovery_candidates": candidates, "pages_scoped": pages_scoped,
         "discover_enabled": serp_enabled(),
-        "est_cost_usd": est,
+        "dataforseo_connected": ds["dataforseo"], "brightdata_connected": ds["brightdata"],
+        "discovery_cached": ds["cached"], "cache_hours": ds["cache_hours"],
+        "last_discovery_cost": ds["last_cost"], "process_cap": ds["process_cap"],
+        "true_backlinks": ds["true_backlinks"], "true_referring_domains": ds["true_referring_domains"],
+        "search_mentions": ds["search_mentions"],
+        "est_discovery_cost_usd": round(est_dfs, 3),
+        "est_llm_cost_usd": round(est_llm, 4),
+        "est_cost_usd": round(est_llm + est_dfs, 3),
     })
 
 
@@ -1458,6 +1689,15 @@ def set_site_schedule(source_id: int, mode: str = Form("off"), day_of_week: int 
     from .scheduler import set_schedule
 
     set_schedule(source_id, mode, int(day_of_week), int(hour), int(minute))
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/sites/{source_id}/external-schedule")
+def set_site_external_schedule(source_id: int, mode: str = Form("off"), day_of_week: int = Form(0),
+                               hour: int = Form(4), minute: int = Form(0)):
+    from .scheduler import set_external_schedule
+
+    set_external_schedule(source_id, mode, int(day_of_week), int(hour), int(minute))
     return RedirectResponse("/", status_code=303)
 
 

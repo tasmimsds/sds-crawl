@@ -50,13 +50,20 @@ async def scope_pages(conn, source_id: int, on_progress=None) -> dict:
     terms = [brand["brand_name"], *brand.get("aliases", [])]
     llm = LlmClient(conn)
     pages = conn.execute(
-        "SELECT id, text FROM external_pages WHERE source_id=? AND fetch_status='ok' AND text IS NOT NULL",
+        """SELECT id, text, source_type, context_paragraph FROM external_pages
+           WHERE source_id=? AND fetch_status='ok'
+             AND (text IS NOT NULL OR context_paragraph IS NOT NULL)""",
         (source_id,)).fetchall()
 
     kept = discarded = 0
     for pi, page in enumerate(pages):
         conn.execute("DELETE FROM external_snippets WHERE page_id=?", (page["id"],))
-        cands = _candidates(page["text"], terms)
+        # backlink/mention items scope on their FULL paragraph (kept intact, not sentence-split);
+        # manual pages fall back to brand-sentence extraction.
+        if page["source_type"] in ("backlink", "mention") and page["context_paragraph"]:
+            cands = [page["context_paragraph"]]
+        else:
+            cands = _candidates(page["text"] or "", terms)
         # LLM layer (batched)
         verdicts = {}
         if llm.enabled and cands:

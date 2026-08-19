@@ -190,15 +190,30 @@ def external_pipeline_state(conn, source_id: int) -> dict:
     project's brand: live if an external run is going, else last run's numbers. Strictly
     scoped to THIS project (its brand profile + its external_pages)."""
     from .external.brand import get_brand
+    from .external import dataforseo as _dfs
     brand = get_brand(conn, source_id)
     brand_name = (brand or {}).get("brand_name") or ""
 
     one = lambda q, *a: conn.execute(q, a).fetchone()["c"]
-    # DISCOVER — sources by type + approval state
+    # DISCOVER — DataForSEO backlinks + mentions + manual sources
+    backlinks = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND source_type='backlink'", source_id)
+    # 'discovery' is the legacy SERP-mention type — count it with mentions
+    mentions = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND source_type IN ('mention','discovery')", source_id)
+    linked = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND mention_type='linked'", source_id)
+    unlinked = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND mention_type='unlinked'", source_id)
+    deferred = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='deferred'", source_id)
+    # TRUE totals from the last discovery (whole footprint, not the processed subset)
+    from .db import get_setting
+    gi = lambda k: int(get_setting(conn, f"{k}:{source_id}") or 0)
+    true_backlinks = gi("ext_true_backlinks")
+    true_domains = gi("ext_true_domains")
+    search_mentions = gi("ext_search_mentions")
     manual = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND source_type='manual'", source_id)
     candidates = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='candidate'", source_id)
     ready = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status IN ('pending','ok','blocked','error')", source_id)
     total_sources = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=?", source_id)
+    referring_domains = one("SELECT COUNT(DISTINCT referring_domain) c FROM external_backlinks WHERE source_id=?", source_id)
+    general_open = one("SELECT COUNT(*) c FROM general_facts WHERE source_id=? AND status='open'", source_id)
     # FETCH — fetch outcomes
     fok = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='ok'", source_id)
     fblocked = one("SELECT COUNT(*) c FROM external_pages WHERE source_id=? AND fetch_status='blocked'", source_id)
@@ -246,16 +261,21 @@ def external_pipeline_state(conn, source_id: int) -> dict:
         "brand": brand_name,
         "has_external": total_sources > 0,
         "has_brand": bool(brand_name),
+        "dfs_connected": _dfs.enabled(),
         "domains": domains,
-        "s1": {"name": "DISCOVER", "status": status_for(1), "manual": manual,
-               "candidates": candidates, "ready": ready, "total": total_sources},
+        "s1": {"name": "DISCOVER", "status": status_for(1), "backlinks": backlinks,
+               "mentions": mentions, "linked": linked, "unlinked": unlinked, "manual": manual,
+               "candidates": candidates, "ready": ready, "total": total_sources,
+               "referring_domains": referring_domains, "deferred": deferred,
+               "true_backlinks": true_backlinks, "true_domains": true_domains,
+               "search_mentions": search_mentions},
         "s2": {"name": "FETCH", "status": status_for(2), "ok": fok, "blocked": fblocked,
                "errored": ferror, "pending": fpending},
         "s3": {"name": "SCOPE", "status": status_for(3), "total": snip_total,
                "kept": snip_kept, "discarded": snip_disc},
         "s4": {"name": "READ", "status": status_for(4), "claims": snip_kept},
-        "s5": {"name": "FACT MATCH", "status": status_for(5), "positive": positive,
-               "issues": issue_ct, "unclear": unclear},
+        "s5": {"name": "MATCH & SORT", "status": status_for(5), "positive": positive,
+               "issues": issue_ct, "unclear": unclear, "general": general_open},
         "message": (job["message"] if job else ""),
     }
 
@@ -400,21 +420,27 @@ async def run_sync_job(conn, job_id: int, source_id: int, *, only_changed=False,
 async def run_external_job(conn, job_id: int, source_id: int, *, discover: bool = True) -> None:
     """Staged external run mirroring the dashboard flow:
     DISCOVER → FETCH → SCOPE → READ → FACT MATCH. Scoped to this project's brand."""
-    from .config import serp_enabled
+    from .external.discover import discover_external
     from .external.factcheck_ext import run_external_factcheck
-    from .external.pages import crawl_external_pages, discover_mentions
+    from .external.pages import crawl_external_pages
     from .external.scope import scope_pages
 
     update_job(conn, job_id, status="running", started_at=now_iso(), stage="discover",
-               message="Finding where the brand is mentioned…")
+               message="Discovering backlinks & brand mentions (DataForSEO)…")
     try:
         def prog(done, total, errs):
             update_job(conn, job_id, progress=done, total=total, errors=errs)
 
-        # 1) DISCOVER — web discovery adds CANDIDATES (approval-gated; not fetched this run)
-        if discover and serp_enabled():
+        # 1) DISCOVER — DataForSEO backlinks + brand mentions (capped + cached).
+        if discover:
             try:
-                await run_in_threadpool(discover_mentions, conn, source_id)
+                d = await run_in_threadpool(discover_external, conn, source_id)
+                update_job(conn, job_id, message=(
+                    f"Discovered {d.get('true_backlinks',0)} backlinks · "
+                    f"{d.get('true_referring_domains',0)} domains · "
+                    f"{d.get('search_mentions',0)} search mentions"
+                    + (f" (cost ${d['cost']})" if d.get("cost") else "")
+                    + (" — cached" if d.get("cached") else "")))
             except Exception as exc:  # noqa: BLE001 — discovery is best-effort
                 print(f"  ! discovery skipped: {exc}")
 
@@ -436,7 +462,7 @@ async def run_external_job(conn, job_id: int, source_id: int, *, discover: bool 
         update_job(conn, job_id, status="done", stage="done", finished_at=now_iso(),
                    message="External check complete.", issues_found=res["findings"],
                    ext_positive=res.get("positive", 0), ext_issue=res.get("findings", 0),
-                   ext_unclear=res.get("unclear", 0))
+                   ext_unclear=res.get("unclear", 0), ext_general=res.get("general", 0))
     except asyncio.CancelledError:
         update_job(conn, job_id, status="canceled", cancelled=1, finished_at=now_iso(),
                    message="External check cancelled.")

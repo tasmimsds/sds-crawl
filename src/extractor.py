@@ -97,6 +97,43 @@ def _largest_block(tree):
     return best
 
 
+def extract_paragraph(html: str, needle: str, max_chars: int = 1200) -> str:
+    """Full paragraph (block element) containing `needle` — the surrounding context of
+    a backlink anchor or a brand mention. Prefers the smallest block (<p>/<li>/<td>/
+    <blockquote>) that contains the text; falls back to a ±350-char window in body text.
+    Returns the whole paragraph (NOT sentence-trimmed) so we see how they describe us."""
+    if not html or not needle:
+        return ""
+    needle_l = normalize_text(needle).lower()
+    if not needle_l:
+        return ""
+    tree = HTMLParser(html)
+    for node in tree.css(_STRIP):
+        node.decompose()
+    best = ""
+    for node in tree.css("p, li, td, blockquote, dd, figcaption"):
+        txt = normalize_text(node.text())
+        if txt and needle_l in txt.lower():
+            # smallest block that still contains the needle = the tightest paragraph
+            if not best or len(txt) < len(best):
+                best = txt
+    if best:
+        return best[:max_chars]
+    # fallback: window around the needle in the page body
+    body = normalize_text((tree.css_first("body") or tree).text())
+    i = body.lower().find(needle_l)
+    if i < 0:
+        return ""
+    start = max(0, i - 350)
+    end = min(len(body), i + len(needle) + 350)
+    seg = body[start:end]
+    if start > 0:
+        seg = "…" + re.sub(r"^\S*\s", "", seg)
+    if end < len(body):
+        seg = re.sub(r"\s\S*$", "", seg) + "…"
+    return seg[:max_chars]
+
+
 # ---- Author extraction (blog/news only) -----------------------------------
 
 _ARTICLE_TYPES = {"Article", "NewsArticle", "BlogPosting", "Report", "TechArticle"}

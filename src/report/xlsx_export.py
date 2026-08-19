@@ -30,7 +30,8 @@ _STATUS_FONT = {
 _HEADER_FILL = PatternFill("solid", fgColor="1A2231")
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
 _TITLE_FONT = Font(bold=True, size=12, color="1A2231")
-_WRAP_COLS = {"url", "external_url", "evidence", "detail", "reason", "expected"}
+_WRAP_COLS = {"url", "external_url", "evidence", "detail", "reason", "expected", "quote", "note",
+              "source_url", "context_paragraph", "anchor_text"}
 _URL_COLS = {"url", "external_url"}
 _DATE_COLS = {"detected_at", "found_at", "created_at"}
 _MAXW = {"url": 60, "external_url": 60, "evidence": 70, "expected": 40, "reason": 50,
@@ -148,6 +149,26 @@ def build_rows_xlsx(rows, ext_rows) -> bytes:
                      "detection_method": "", "detected_at": ""})
     wb = Workbook(); ws = wb.active; ws.title = "Findings"
     _write_sheet(ws, f"Filtered findings — generated {datetime.now():%Y-%m-%d %H:%M}", cols, data)
+    return _save(wb)
+
+
+def build_external_items_xlsx(conn, source_id: int, aliases=None) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Backlinks & Mentions"
+    rows = cx.external_item_rows(conn, source_id, aliases)
+    _write_sheet(ws, _title(conn, source_id, "all", "Backlinks & Mentions (context report)"),
+                 cx.EXTITEM_COLS, rows)
+    return _save(wb)
+
+
+def build_general_facts_xlsx(conn, source_id: int, scope: str = "open") -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "General Facts"
+    rows = [{k: r[k] for k in cx.GENFACT_COLS} for r in cx.general_fact_rows(conn, source_id, scope)]
+    _write_sheet(ws, _title(conn, source_id, scope, "General Facts (brand info to review)"),
+                 cx.GENFACT_COLS, rows)
     return _save(wb)
 
 
